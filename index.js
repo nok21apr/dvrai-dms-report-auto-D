@@ -111,8 +111,15 @@ async function clickByXPath(page, xpath, description = 'Element') {
             '--window-size=1920,1080',
             '--disable-popup-blocking', // ป้องกัน Popup ถูกบล็อก
             '--allow-running-insecure-content', // อนุญาตเนื้อหา HTTP
-            '--ignore-certificate-errors',
-            '--unsafely-treat-insecure-origin-as-secure=http://cctvwli.com:3001' // ระบุเว็บที่มีปัญหาให้มองว่าปลอดภัย
+            '--ignore-certificate-errors', // ข้าม Certificate Error
+            '--unsafely-treat-insecure-origin-as-secure=http://cctvwli.com:3001', // ระบุเว็บที่มีปัญหา
+            // --- เพิ่มคำสั่งปิด Safe Browsing เพื่อแก้ปัญหาหน้าแดง ---
+            '--disable-web-security', 
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-site-isolation-trials',
+            '--disable-client-side-phishing-detection',
+            '--no-first-run',
+            '--no-default-browser-check'
         ]
     });
 
@@ -200,7 +207,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
             throw new Error(`Failed to login after ${maxRetries} attempts.`);
         }
 
-        // --- STEP 5: เข้าสู่หน้า Report Center (Loop Retry Mode) ---
+        // --- STEP 5: เข้าสู่หน้า Report Center (Loop Retry Mode + Bypassing) ---
         console.log('5. Accessing Report Center (Loop Retry)...');
         
         let reportPage = null;
@@ -208,7 +215,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
         const initialPageCount = initialPages.length;
         
         const startTime = Date.now();
-        const stepTimeout = 60000; // ให้เวลา 60 วินาทีในการพยายามเปิดหน้าใหม่
+        const stepTimeout = 60000; // ให้เวลา 60 วินาที
 
         console.log(`   Initial pages: ${initialPageCount}. Starting click loop...`);
 
@@ -219,6 +226,27 @@ async function clickByXPath(page, xpath, description = 'Element') {
             if (currentPages.length > initialPageCount) {
                 reportPage = currentPages[currentPages.length - 1]; // เอาหน้าสุดท้ายที่เพิ่งเกิด
                 console.log(`   >>> New tab detected! URL: ${reportPage.url()}`);
+                
+                // ตรวจสอบว่าเป็นหน้า Warning สีแดงหรือไม่
+                const pageTitle = await reportPage.title();
+                console.log(`   Page Title: ${pageTitle}`);
+                
+                // ถ้าติดหน้าแดง ให้พยายาม bypass (เผื่อ args เอาไม่อยู่)
+                if (pageTitle.includes('Privacy error') || pageTitle.includes('Deceptive') || pageTitle.includes('Security')) {
+                    console.log('   !!! Detected Security Warning Page. Attempting to bypass...');
+                    try {
+                        // กดปุ่ม Advanced / Details (ถ้ามี)
+                        const advancedBtn = await reportPage.$('#details-button');
+                        if (advancedBtn) {
+                            await advancedBtn.click();
+                            await new Promise(r => setTimeout(r, 1000));
+                            // กด proceed (visit this unsafe site)
+                            const proceedLink = await reportPage.$('#proceed-link');
+                            if (proceedLink) await proceedLink.click();
+                        }
+                    } catch (e) { console.log('   Bypass click failed (might not be needed with args)'); }
+                }
+                
                 break;
             }
 
@@ -227,13 +255,10 @@ async function clickByXPath(page, xpath, description = 'Element') {
             // 2. พยายามกดปุ่ม (ใช้ JS execute เป็นหลัก เพราะแม่นยำที่สุด)
             try {
                 const jsResult = await page.evaluate(() => {
-                    // ลองเรียกฟังก์ชันโดยตรง
                     if (typeof showReportCenter === 'function') {
                         showReportCenter();
                         return 'Executed showReportCenter() directly';
-                    } 
-                    // ถ้าไม่มีฟังก์ชัน ให้ลองหา Element แล้วคลิก
-                    else {
+                    } else {
                         const btn = document.querySelector('div[onclick*="showReportCenter"]') || 
                                     document.querySelector('#main-topPanel > div.header-nav > div:nth-child(7)');
                         if (btn) {
@@ -247,7 +272,6 @@ async function clickByXPath(page, xpath, description = 'Element') {
                 if (jsResult) {
                     console.log(`   Success: ${jsResult}`);
                 } else {
-                    // ถ้า JS ไม่ได้ผล ลองใช้ XPath ปกติ
                     console.log('   JS failed. Trying XPath click...');
                     const xpath = '//*[@id="main-topPanel"]/div[6]/div[7]';
                     const [el] = await page.$x(xpath);
@@ -257,13 +281,12 @@ async function clickByXPath(page, xpath, description = 'Element') {
                 console.log(`   Click attempt failed: ${e.message}`);
             }
 
-            // 3. รอสักพัก (5 วินาที) แล้ววนกลับไปเช็คใหม่
-            console.log('   Waiting 5s for popup to appear...');
+            // 3. รอสักพัก แล้ววนกลับไปเช็คใหม่
+            console.log('   Waiting 5s for popup...');
             await new Promise(r => setTimeout(r, 5000));
         }
 
         if (!reportPage) {
-            // เช็คครั้งสุดท้ายเผื่อเปิดแล้วแต่จับไม่ได้
             const finalPages = await browser.pages();
             if (finalPages.length > initialPageCount) {
                  reportPage = finalPages[finalPages.length - 1];
@@ -274,7 +297,10 @@ async function clickByXPath(page, xpath, description = 'Element') {
         }
         
         // รอให้หน้าโหลดเสร็จจริง
-        await reportPage.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        try {
+            await reportPage.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+        } catch(e) { console.log('   Wait navigation timeout (page might be loaded already)'); }
+
         try {
             await reportPage.waitForXPath('//*[@id="root"]', { timeout: 10000 });
         } catch (e) {
