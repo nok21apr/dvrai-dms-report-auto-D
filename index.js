@@ -182,6 +182,11 @@ async function clickByXPath(page, xpath, description = 'Element') {
                 } else {
                     console.log('   SUCCESS: Login Successful!');
                     isLoggedIn = true;
+                    
+                    // เพิ่มเวลาหน่วง 10 วินาที ตามที่แจ้ง
+                    console.log('   Waiting 10 seconds for dashboard to fully load...');
+                    await new Promise(r => setTimeout(r, 10000));
+                    
                     break; // ออกจาก Loop
                 }
 
@@ -207,16 +212,17 @@ async function clickByXPath(page, xpath, description = 'Element') {
             });
         });
         
-        // --- จุดคลิกปุ่ม Report Center (ใช้แบบ Robust) ---
+        // --- จุดคลิกปุ่ม Report Center (ใช้ Selectors จาก JSON ที่คุณให้มา) ---
+        // 1. xpath=//*[@id="main-topPanel"]/div[6]/div[7] (สังเกตว่าคลิก div ไม่ใช่ i)
+        // 2. xpath=//div[@onclick='showReportCenter()']
         const reportCenterXPath = `
-            //div[@title="ศูนย์รายงาน"] | 
-            //div[contains(@onclick, "showReportCenter")] | 
-            //*[@id="main-topPanel"]/div[6]/div[7]/i |
-            //i[contains(@class, "fa-laptop")]/.. 
+            //*[@id="main-topPanel"]/div[6]/div[7] | 
+            //div[@onclick='showReportCenter()'] |
+            //div[@title="ศูนย์รายงาน"] 
         `;
 
         await page.waitForXPath(reportCenterXPath, { visible: true, timeout: 30000 });
-        await clickByXPath(page, reportCenterXPath, 'Report Center Button (Laptop Icon)');
+        await clickByXPath(page, reportCenterXPath, 'Report Center Button (Laptop Icon DIV)');
         
         // รอหน้าใหม่โหลด
         const reportPage = await newPagePromise;
