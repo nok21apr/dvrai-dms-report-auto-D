@@ -181,15 +181,10 @@ async function clickByXPath(page, xpath, description = 'Element') {
             });
         });
         
-        // --- แก้ไขจุดคลิกปุ่ม Report Center ตาม HTML ที่คุณให้มา ---
-        // HTML เป้าหมาย: <div title="ศูนย์รายงาน" class="header-nav-download-btn zh-btn" onclick="showReportCenter()">
-        // ใช้ XPath ที่เจาะจง attribute เหล่านี้โดยตรง
-        const reportCenterXPath = `
-            //div[@title="ศูนย์รายงาน"] | 
-            //div[contains(@onclick, "showReportCenter")] |
-            //div[contains(@class, "header-nav-download-btn")]
-        `;
-        
+        // --- แก้ไขจุดคลิกปุ่ม Report Center ---
+        // ใช้ XPath ที่คุณระบุมาเป็นตัวหลัก
+        const reportCenterXPath = `//*[@id="main-topPanel"]/div[6]/div[7]/i`;
+
         // รอให้ Element ปรากฏก่อนคลิก (เผื่อหน้าเว็บโหลดช้า)
         await page.waitForXPath(reportCenterXPath, { visible: true, timeout: 30000 });
         await clickByXPath(page, reportCenterXPath, 'Report Center Button (Laptop Icon)');
