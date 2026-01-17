@@ -207,7 +207,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
             throw new Error(`Failed to login after ${maxRetries} attempts.`);
         }
 
-        // --- STEP 5: เข้าสู่หน้า Report Center (Loop Retry Mode + Bypassing) ---
+        // --- STEP 5: เข้าสู่หน้า Report Center (Loop Retry Mode) ---
         console.log('5. Accessing Report Center (Loop Retry)...');
         
         let reportPage = null;
@@ -215,7 +215,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
         const initialPageCount = initialPages.length;
         
         const startTime = Date.now();
-        const stepTimeout = 60000; // ให้เวลา 60 วินาที
+        const stepTimeout = 60000; // ให้เวลา 60 วินาทีในการพยายามเปิดหน้าใหม่
 
         console.log(`   Initial pages: ${initialPageCount}. Starting click loop...`);
 
@@ -231,22 +231,18 @@ async function clickByXPath(page, xpath, description = 'Element') {
                 const pageTitle = await reportPage.title();
                 console.log(`   Page Title: ${pageTitle}`);
                 
-                // ถ้าติดหน้าแดง ให้พยายาม bypass (เผื่อ args เอาไม่อยู่)
                 if (pageTitle.includes('Privacy error') || pageTitle.includes('Deceptive') || pageTitle.includes('Security')) {
                     console.log('   !!! Detected Security Warning Page. Attempting to bypass...');
                     try {
-                        // กดปุ่ม Advanced / Details (ถ้ามี)
                         const advancedBtn = await reportPage.$('#details-button');
                         if (advancedBtn) {
                             await advancedBtn.click();
                             await new Promise(r => setTimeout(r, 1000));
-                            // กด proceed (visit this unsafe site)
                             const proceedLink = await reportPage.$('#proceed-link');
                             if (proceedLink) await proceedLink.click();
                         }
                     } catch (e) { console.log('   Bypass click failed (might not be needed with args)'); }
                 }
-                
                 break;
             }
 
@@ -255,10 +251,13 @@ async function clickByXPath(page, xpath, description = 'Element') {
             // 2. พยายามกดปุ่ม (ใช้ JS execute เป็นหลัก เพราะแม่นยำที่สุด)
             try {
                 const jsResult = await page.evaluate(() => {
+                    // ลองเรียกฟังก์ชันโดยตรง
                     if (typeof showReportCenter === 'function') {
                         showReportCenter();
                         return 'Executed showReportCenter() directly';
-                    } else {
+                    } 
+                    // ถ้าไม่มีฟังก์ชัน ให้ลองหา Element แล้วคลิก
+                    else {
                         const btn = document.querySelector('div[onclick*="showReportCenter"]') || 
                                     document.querySelector('#main-topPanel > div.header-nav > div:nth-child(7)');
                         if (btn) {
@@ -281,8 +280,8 @@ async function clickByXPath(page, xpath, description = 'Element') {
                 console.log(`   Click attempt failed: ${e.message}`);
             }
 
-            // 3. รอสักพัก แล้ววนกลับไปเช็คใหม่
-            console.log('   Waiting 5s for popup...');
+            // 3. รอสักพัก (5 วินาที) แล้ววนกลับไปเช็คใหม่
+            console.log('   Waiting 5s for popup to appear...');
             await new Promise(r => setTimeout(r, 5000));
         }
 
@@ -318,10 +317,38 @@ async function clickByXPath(page, xpath, description = 'Element') {
 
         // --- STEP 6: ตั้งค่ารายงาน (DMS) ---
         console.log('6. Configuring Report Filters...');
+
+        // 6.1 Selecting DMS Report Button using Keyboard Navigation (Tab x3)
+        console.log('   6.1 Navigating to DMS Report Button via Keyboard (Tab x3)...');
         
-        // 6.1 คลิกปุ่ม DMS Report
-        await new Promise(r => setTimeout(r, 2000));
-        await clickByXPath(reportPage, '//button[contains(.,"รายงาน DMS")] | //*[@data-testid="FaceIcon"]/..', 'DMS Report Button');
+        try {
+            // คลิกที่ body เพื่อ focus หน้าเว็บ
+            await reportPage.click('body');
+            await new Promise(r => setTimeout(r, 500));
+
+            // กด Tab 3 ครั้ง
+            for (let i = 1; i <= 3; i++) {
+                console.log(`      Pressing Tab ${i}...`);
+                await reportPage.keyboard.press('Tab');
+                await new Promise(r => setTimeout(r, 300)); // หน่วงเวลาเล็กน้อยระหว่างการกด Tab
+            }
+
+            // กด Enter
+            console.log('      Pressing Enter to select DMS Report...');
+            await reportPage.keyboard.press('Enter');
+            
+            // รอสักพักให้ UI ตอบสนอง
+            await new Promise(r => setTimeout(r, 2000));
+
+        } catch (e) {
+            console.warn(`   Keyboard navigation failed: ${e.message}. Trying XPath fallback...`);
+            // Fallback: ถ้ากด Tab ไม่ติด ให้ลองคลิกแบบเดิม
+             const dmsButtonXPath = `
+                //*[@data-testid="FaceIcon"]/.. | 
+                //button[contains(text(), "รายงาน DMS")]
+            `;
+            await clickByXPath(reportPage, dmsButtonXPath, 'DMS Report Button (Fallback)');
+        }
 
         // 6.2 เคลียร์รายการและเลือก Dropdown
         console.log('   Selecting Alerts...');
