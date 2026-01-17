@@ -203,14 +203,22 @@ async function clickByXPath(page, xpath, description = 'Element') {
         // --- STEP 5: เข้าสู่หน้า Report Center (เปิด Tab ใหม่) ---
         console.log('5. Accessing Report Center...');
         
-        // เตรียมดักจับ Popup ใหม่
+        // เตรียมดักจับ Popup ใหม่ (สร้าง Promise รอไว้ก่อนกด)
         const newPagePromise = new Promise(resolve => {
-            browser.once('targetcreated', async target => {
-                if (target.type() === 'page') {
+            const listener = async (target) => {
+                 if (target.type() === 'page') {
+                    // ลบ listener ออกเพื่อไม่ให้ทำงานซ้ำ
+                    browser.off('targetcreated', listener);
                     resolve(await target.page());
                 }
-            });
+            };
+            browser.on('targetcreated', listener);
         });
+
+        // สร้าง Promise สำหรับ Timeout ในการรอ Popup (เช่น 20 วินาที)
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Timeout waiting for Report Center popup')), 20000)
+        );
         
         // --- ใช้กลยุทธ์ "Try-All" เพื่อกดปุ่ม Report Center ให้ได้ ---
         console.log('   Attempting to find Report Center button...');
@@ -220,7 +228,8 @@ async function clickByXPath(page, xpath, description = 'Element') {
         if (!clicked) {
             try {
                 const cssSelector = '#main-topPanel > div.header-nav > div:nth-child(7)';
-                await page.waitForSelector(cssSelector, { visible: true, timeout: 5000 });
+                // ลดเวลารอให้สั้นลง (3 วินาที)
+                await page.waitForSelector(cssSelector, { visible: true, timeout: 3000 });
                 await page.click(cssSelector);
                 console.log('   Clicked using CSS Selector!');
                 clicked = true;
@@ -231,7 +240,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
         if (!clicked) {
             try {
                 const xpath = '//*[@id="main-topPanel"]/div[6]/div[7]';
-                await page.waitForXPath(xpath, { visible: true, timeout: 5000 });
+                await page.waitForXPath(xpath, { visible: true, timeout: 3000 });
                 const [el] = await page.$x(xpath);
                 if (el) {
                     await el.click();
@@ -246,7 +255,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
             try {
                 // XPath หา div ที่มี title="ศูนย์รายงาน" หรือ onclick="showReportCenter()"
                 const attrXPath = '//div[@title="ศูนย์รายงาน"] | //div[contains(@onclick, "showReportCenter")]';
-                await page.waitForXPath(attrXPath, { visible: true, timeout: 5000 });
+                await page.waitForXPath(attrXPath, { visible: true, timeout: 3000 });
                 const [el] = await page.$x(attrXPath);
                 if (el) {
                     await el.click();
@@ -264,20 +273,37 @@ async function clickByXPath(page, xpath, description = 'Element') {
                     if (typeof showReportCenter === 'function') {
                         showReportCenter();
                     } else {
-                        throw new Error('showReportCenter function not found');
+                        // ถ้าไม่เจอ function ลองหา element แล้ว click() via JS
+                        const el = document.querySelector('div[onclick*="showReportCenter"]');
+                        if(el) el.click();
+                        else throw new Error('showReportCenter function or element not found');
                     }
                 });
-                console.log('   Executed JS showReportCenter()!');
+                console.log('   Executed JS showReportCenter() / Force Click!');
                 clicked = true;
             } catch (e) {
                 console.error('   All click methods failed:', e.message);
-                throw new Error('Failed to open Report Center via any method.');
+                // ไม่ throw error ที่นี่ ปล่อยให้ไปตายที่ขั้นตอนรอ Popup ถ้ามันไม่ขึ้นจริงๆ
             }
         }
         
-        // รอหน้าใหม่โหลด
-        const reportPage = await newPagePromise;
-        if (!reportPage) throw new Error("Report page did not open!");
+        // รอหน้าใหม่โหลด (ใช้ Race ระหว่างได้หน้าใหม่ กับ หมดเวลา)
+        console.log('   Waiting for new tab...');
+        let reportPage;
+        try {
+            reportPage = await Promise.race([newPagePromise, timeoutPromise]);
+        } catch (error) {
+            // ถ้า Timeout หรือหาไม่เจอ ลองเช็คว่ามี Tab อื่นเปิดอยู่แล้วหรือไม่ (เผื่อเปิดไปแล้วแต่เราจับ event ไม่ทัน)
+            console.log('   Popup wait timeout or failed. Checking existing pages...');
+            const pages = await browser.pages();
+            // ปกติ pages[0] คือหน้า Login, pages[1] น่าจะเป็นหน้า Report
+            if (pages.length > 1) {
+                reportPage = pages[pages.length - 1]; // เอาหน้าล่าสุด
+                console.log(`   Found existing page: ${reportPage.url()}`);
+            } else {
+                throw new Error("Report page did not open and no extra tabs found!");
+            }
+        }
         
         await reportPage.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
         try {
