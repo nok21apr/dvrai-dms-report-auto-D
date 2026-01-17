@@ -200,111 +200,80 @@ async function clickByXPath(page, xpath, description = 'Element') {
             throw new Error(`Failed to login after ${maxRetries} attempts.`);
         }
 
-        // --- STEP 5: เข้าสู่หน้า Report Center (เปิด Tab ใหม่) ---
-        console.log('5. Accessing Report Center...');
+        // --- STEP 5: เข้าสู่หน้า Report Center (Loop Retry Mode) ---
+        console.log('5. Accessing Report Center (Loop Retry)...');
         
-        // เตรียมดักจับ Popup ใหม่ (สร้าง Promise รอไว้ก่อนกด)
-        const newPagePromise = new Promise(resolve => {
-            const listener = async (target) => {
-                 if (target.type() === 'page') {
-                    // ลบ listener ออกเพื่อไม่ให้ทำงานซ้ำ
-                    browser.off('targetcreated', listener);
-                    resolve(await target.page());
-                }
-            };
-            browser.on('targetcreated', listener);
-        });
-
-        // สร้าง Promise สำหรับ Timeout ในการรอ Popup (เช่น 20 วินาที)
-        const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Timeout waiting for Report Center popup')), 20000)
-        );
+        let reportPage = null;
+        const initialPages = await browser.pages();
+        const initialPageCount = initialPages.length;
         
-        // --- ใช้กลยุทธ์ "Try-All" เพื่อกดปุ่ม Report Center ให้ได้ ---
-        console.log('   Attempting to find Report Center button...');
-        let clicked = false;
-        
-        // 1. ลองใช้ CSS Selector ที่แม่นยำที่สุด (จาก DevTools)
-        if (!clicked) {
-            try {
-                const cssSelector = '#main-topPanel > div.header-nav > div:nth-child(7)';
-                // ลดเวลารอให้สั้นลง (3 วินาที)
-                await page.waitForSelector(cssSelector, { visible: true, timeout: 3000 });
-                await page.click(cssSelector);
-                console.log('   Clicked using CSS Selector!');
-                clicked = true;
-            } catch (e) { console.log('   CSS Selector failed, trying XPath...'); }
-        }
+        const startTime = Date.now();
+        const stepTimeout = 60000; // ให้เวลา 60 วินาทีในการพยายามเปิดหน้าใหม่
 
-        // 2. ลองใช้ XPath ที่แม่นยำที่สุด (จาก DevTools)
-        if (!clicked) {
-            try {
-                const xpath = '//*[@id="main-topPanel"]/div[6]/div[7]';
-                await page.waitForXPath(xpath, { visible: true, timeout: 3000 });
-                const [el] = await page.$x(xpath);
-                if (el) {
-                    await el.click();
-                    console.log('   Clicked using XPath!');
-                    clicked = true;
-                }
-            } catch (e) { console.log('   XPath failed, trying Attributes...'); }
-        }
+        console.log(`   Initial pages: ${initialPageCount}. Starting click loop...`);
 
-        // 3. ลองหาจาก Attribute (Title/Onclick/Class)
-        if (!clicked) {
-            try {
-                // XPath หา div ที่มี title="ศูนย์รายงาน" หรือ onclick="showReportCenter()"
-                const attrXPath = '//div[@title="ศูนย์รายงาน"] | //div[contains(@onclick, "showReportCenter")]';
-                await page.waitForXPath(attrXPath, { visible: true, timeout: 3000 });
-                const [el] = await page.$x(attrXPath);
-                if (el) {
-                    await el.click();
-                    console.log('   Clicked using Attribute XPath!');
-                    clicked = true;
-                }
-            } catch (e) { console.log('   Attributes failed, trying Fallback...'); }
-        }
+        // วนลูปจนกว่าจะเจอหน้าใหม่ หรือหมดเวลา
+        while (Date.now() - startTime < stepTimeout) {
+            // 1. เช็คว่ามีหน้าใหม่เกิดขึ้นหรือยัง
+            const currentPages = await browser.pages();
+            if (currentPages.length > initialPageCount) {
+                reportPage = currentPages[currentPages.length - 1]; // เอาหน้าสุดท้ายที่เพิ่งเกิด
+                console.log(`   >>> New tab detected! URL: ${reportPage.url()}`);
+                break;
+            }
 
-        // 4. ไม้ตาย: สั่งรัน JavaScript showReportCenter() โดยตรง
-        if (!clicked) {
-            console.log('   Fallback: Executing window.showReportCenter() directly via JS...');
+            console.log('   Attempting to trigger Report Center...');
+
+            // 2. พยายามกดปุ่ม (ใช้ JS execute เป็นหลัก เพราะแม่นยำที่สุด)
             try {
-                await page.evaluate(() => {
+                const jsResult = await page.evaluate(() => {
+                    // ลองเรียกฟังก์ชันโดยตรง
                     if (typeof showReportCenter === 'function') {
                         showReportCenter();
-                    } else {
-                        // ถ้าไม่เจอ function ลองหา element แล้ว click() via JS
-                        const el = document.querySelector('div[onclick*="showReportCenter"]');
-                        if(el) el.click();
-                        else throw new Error('showReportCenter function or element not found');
+                        return 'Executed showReportCenter() directly';
+                    } 
+                    // ถ้าไม่มีฟังก์ชัน ให้ลองหา Element แล้วคลิก
+                    else {
+                        const btn = document.querySelector('div[onclick*="showReportCenter"]') || 
+                                    document.querySelector('#main-topPanel > div.header-nav > div:nth-child(7)');
+                        if (btn) {
+                            btn.click();
+                            return 'Clicked element via JS';
+                        }
                     }
+                    return null;
                 });
-                console.log('   Executed JS showReportCenter() / Force Click!');
-                clicked = true;
+
+                if (jsResult) {
+                    console.log(`   Success: ${jsResult}`);
+                } else {
+                    // ถ้า JS ไม่ได้ผล ลองใช้ XPath ปกติ
+                    console.log('   JS failed. Trying XPath click...');
+                    const xpath = '//*[@id="main-topPanel"]/div[6]/div[7]';
+                    const [el] = await page.$x(xpath);
+                    if (el) await el.click();
+                }
             } catch (e) {
-                console.error('   All click methods failed:', e.message);
-                // ไม่ throw error ที่นี่ ปล่อยให้ไปตายที่ขั้นตอนรอ Popup ถ้ามันไม่ขึ้นจริงๆ
+                console.log(`   Click attempt failed: ${e.message}`);
             }
+
+            // 3. รอสักพัก (5 วินาที) แล้ววนกลับไปเช็คใหม่
+            console.log('   Waiting 5s for popup to appear...');
+            await new Promise(r => setTimeout(r, 5000));
         }
-        
-        // รอหน้าใหม่โหลด (ใช้ Race ระหว่างได้หน้าใหม่ กับ หมดเวลา)
-        console.log('   Waiting for new tab...');
-        let reportPage;
-        try {
-            reportPage = await Promise.race([newPagePromise, timeoutPromise]);
-        } catch (error) {
-            // ถ้า Timeout หรือหาไม่เจอ ลองเช็คว่ามี Tab อื่นเปิดอยู่แล้วหรือไม่ (เผื่อเปิดไปแล้วแต่เราจับ event ไม่ทัน)
-            console.log('   Popup wait timeout or failed. Checking existing pages...');
-            const pages = await browser.pages();
-            // ปกติ pages[0] คือหน้า Login, pages[1] น่าจะเป็นหน้า Report
-            if (pages.length > 1) {
-                reportPage = pages[pages.length - 1]; // เอาหน้าล่าสุด
-                console.log(`   Found existing page: ${reportPage.url()}`);
+
+        if (!reportPage) {
+            // เช็คครั้งสุดท้ายเผื่อเปิดแล้วแต่จับไม่ได้
+            const finalPages = await browser.pages();
+            if (finalPages.length > initialPageCount) {
+                 reportPage = finalPages[finalPages.length - 1];
+                 console.log(`   Found page at last check: ${reportPage.url()}`);
             } else {
-                throw new Error("Report page did not open and no extra tabs found!");
+                throw new Error("Failed to open Report Center after 60 seconds of retries.");
             }
         }
         
+        // รอให้หน้าโหลดเสร็จจริง
         await reportPage.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
         try {
             await reportPage.waitForXPath('//*[@id="root"]', { timeout: 10000 });
