@@ -1,4 +1,4 @@
-name: Thai Tracking DMS Automation Bot
+name: ThaiTracking DMS Automation Bot
 
 on:
   workflow_dispatch: # กดรันเอง
