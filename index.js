@@ -212,17 +212,68 @@ async function clickByXPath(page, xpath, description = 'Element') {
             });
         });
         
-        // --- จุดคลิกปุ่ม Report Center (ใช้ Selectors จาก JSON ที่คุณให้มา) ---
-        // 1. xpath=//*[@id="main-topPanel"]/div[6]/div[7] (สังเกตว่าคลิก div ไม่ใช่ i)
-        // 2. xpath=//div[@onclick='showReportCenter()']
-        const reportCenterXPath = `
-            //*[@id="main-topPanel"]/div[6]/div[7] | 
-            //div[@onclick='showReportCenter()'] |
-            //div[@title="ศูนย์รายงาน"] 
-        `;
+        // --- ใช้กลยุทธ์ "Try-All" เพื่อกดปุ่ม Report Center ให้ได้ ---
+        console.log('   Attempting to find Report Center button...');
+        let clicked = false;
+        
+        // 1. ลองใช้ CSS Selector ที่แม่นยำที่สุด (จาก DevTools)
+        if (!clicked) {
+            try {
+                const cssSelector = '#main-topPanel > div.header-nav > div:nth-child(7)';
+                await page.waitForSelector(cssSelector, { visible: true, timeout: 5000 });
+                await page.click(cssSelector);
+                console.log('   Clicked using CSS Selector!');
+                clicked = true;
+            } catch (e) { console.log('   CSS Selector failed, trying XPath...'); }
+        }
 
-        await page.waitForXPath(reportCenterXPath, { visible: true, timeout: 30000 });
-        await clickByXPath(page, reportCenterXPath, 'Report Center Button (Laptop Icon DIV)');
+        // 2. ลองใช้ XPath ที่แม่นยำที่สุด (จาก DevTools)
+        if (!clicked) {
+            try {
+                const xpath = '//*[@id="main-topPanel"]/div[6]/div[7]';
+                await page.waitForXPath(xpath, { visible: true, timeout: 5000 });
+                const [el] = await page.$x(xpath);
+                if (el) {
+                    await el.click();
+                    console.log('   Clicked using XPath!');
+                    clicked = true;
+                }
+            } catch (e) { console.log('   XPath failed, trying Attributes...'); }
+        }
+
+        // 3. ลองหาจาก Attribute (Title/Onclick/Class)
+        if (!clicked) {
+            try {
+                // XPath หา div ที่มี title="ศูนย์รายงาน" หรือ onclick="showReportCenter()"
+                const attrXPath = '//div[@title="ศูนย์รายงาน"] | //div[contains(@onclick, "showReportCenter")]';
+                await page.waitForXPath(attrXPath, { visible: true, timeout: 5000 });
+                const [el] = await page.$x(attrXPath);
+                if (el) {
+                    await el.click();
+                    console.log('   Clicked using Attribute XPath!');
+                    clicked = true;
+                }
+            } catch (e) { console.log('   Attributes failed, trying Fallback...'); }
+        }
+
+        // 4. ไม้ตาย: สั่งรัน JavaScript showReportCenter() โดยตรง
+        if (!clicked) {
+            console.log('   Fallback: Executing window.showReportCenter() directly via JS...');
+            try {
+                await page.evaluate(() => {
+                    if (typeof showReportCenter === 'function') {
+                        showReportCenter();
+                    } else {
+                        throw new Error('showReportCenter function not found');
+                    }
+                });
+                console.log('   Executed JS showReportCenter()!');
+                clicked = true;
+            } catch (e) {
+                console.error('   All click methods failed:', e.message);
+                throw new Error('Failed to open Report Center via any method.');
+            }
+        }
         
         // รอหน้าใหม่โหลด
         const reportPage = await newPagePromise;
