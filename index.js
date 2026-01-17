@@ -181,9 +181,14 @@ async function clickByXPath(page, xpath, description = 'Element') {
             });
         });
         
-        // --- แก้ไขจุดคลิกปุ่ม Report Center ---
-        // ใช้ XPath ที่คุณระบุมาเป็นตัวหลัก
-        const reportCenterXPath = `//*[@id="main-topPanel"]/div[6]/div[7]/i`;
+        // --- แก้ไขจุดคลิกปุ่ม Report Center (ใช้แบบ Robust) ---
+        // รวมทุกความเป็นไปได้: Title, OnClick, Class และ XPath เดิม
+        const reportCenterXPath = `
+            //div[@title="ศูนย์รายงาน"] | 
+            //div[contains(@onclick, "showReportCenter")] | 
+            //*[@id="main-topPanel"]/div[6]/div[7]/i |
+            //i[contains(@class, "fa-laptop")]/.. 
+        `;
 
         // รอให้ Element ปรากฏก่อนคลิก (เผื่อหน้าเว็บโหลดช้า)
         await page.waitForXPath(reportCenterXPath, { visible: true, timeout: 30000 });
