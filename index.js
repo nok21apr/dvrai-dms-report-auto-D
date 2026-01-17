@@ -11,7 +11,7 @@ const config = {
     emailFrom: process.env.EMAIL_FROM,
     emailPass: process.env.EMAIL_PASSWORD,
     emailTo: process.env.EMAIL_TO,
-    downloadTimeout: 120000 // เพิ่มเวลารอโหลดไฟล์เป็น 2 นาที (เผื่อไฟล์ใหญ่)
+    downloadTimeout: 120000 // เพิ่มเวลารอโหลดไฟล์เป็น 2 นาที
 };
 
 const downloadPath = path.resolve(__dirname, 'downloads');
@@ -21,20 +21,18 @@ if (!fs.existsSync(downloadPath)) {
     fs.mkdirSync(downloadPath);
 }
 
-// ฟังก์ชันรอจนกว่าไฟล์จะโหลดเสร็จ (สำคัญมากสำหรับการโหลดไฟล์จริง)
+// ฟังก์ชันรอจนกว่าไฟล์จะโหลดเสร็จ
 async function waitForFileToDownload(dir, timeout) {
     return new Promise((resolve, reject) => {
         let timer;
-        const checkInterval = 1000; // เช็คทุก 1 วินาที
+        const checkInterval = 1000;
         let timePassed = 0;
 
         const checker = setInterval(() => {
             const files = fs.readdirSync(dir);
-            // หาไฟล์ที่ไม่ใช่นามสกุล .crdownload หรือ .tmp (คือไฟล์ที่โหลดเสร็จแล้ว)
             const file = files.find(f => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && fs.statSync(path.join(dir, f)).isFile());
 
             if (file) {
-                // เช็คว่าขนาดไฟล์นิ่งหรือยัง (ป้องกันไฟล์ที่กำลังเขียนอยู่)
                 clearInterval(checker);
                 clearTimeout(timer);
                 resolve(path.join(dir, file));
@@ -62,7 +60,6 @@ async function sendEmail(subject, message, attachmentPath = null) {
         auth: { user: config.emailFrom, pass: config.emailPass }
     });
 
-    // กำหนดรูปแบบไฟล์แนบ
     const attachments = [];
     if (attachmentPath && fs.existsSync(attachmentPath)) {
         attachments.push({
@@ -87,7 +84,7 @@ async function sendEmail(subject, message, attachmentPath = null) {
     }
 }
 
-// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath (เพราะเว็บนี้ใช้ XPath แม่นกว่า ID)
+// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath
 async function clickByXPath(page, xpath, description = 'Element') {
     try {
         await page.waitForXPath(xpath, { timeout: 10000, visible: true });
@@ -107,17 +104,21 @@ async function clickByXPath(page, xpath, description = 'Element') {
     console.log(`--- Started GPS Report Automation [${new Date().toLocaleString()}] ---`);
     const browser = await puppeteer.launch({
         headless: "new",
+        ignoreHTTPSErrors: true, // ข้าม Error ใบรับรองความปลอดภัย
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox',
             '--window-size=1920,1080',
-            '--disable-popup-blocking' // อนุญาต Popup (เพราะ Report เปิดหน้าใหม่)
+            '--disable-popup-blocking', // ป้องกัน Popup ถูกบล็อก
+            '--allow-running-insecure-content', // อนุญาตเนื้อหา HTTP
+            '--ignore-certificate-errors',
+            '--unsafely-treat-insecure-origin-as-secure=http://cctvwli.com:3001' // ระบุเว็บที่มีปัญหาให้มองว่าปลอดภัย
         ]
     });
 
     const page = await browser.newPage();
     
-    // ตั้งค่า Download Path ให้หน้าแรก
+    // ตั้งค่า Download Path
     const client = await page.target().createCDPSession();
     await client.send('Page.setDownloadBehavior', {
         behavior: 'allow',
@@ -171,22 +172,35 @@ async function clickByXPath(page, xpath, description = 'Element') {
         // --- STEP 5: เข้าสู่หน้า Report Center (เปิด Tab ใหม่) ---
         console.log('5. Accessing Report Center...');
         
-        // เราต้องดักจับ Event เมื่อมีหน้าต่างใหม่เด้งขึ้นมา
-        const newPagePromise = new Promise(resolve => browser.once('targetcreated', target => resolve(target.page())));
+        // เตรียมดักจับ Popup ใหม่ที่แม่นยำขึ้น
+        const newPagePromise = new Promise(resolve => {
+            browser.once('targetcreated', async target => {
+                if (target.type() === 'page') {
+                    resolve(await target.page());
+                }
+            });
+        });
         
-        // คลิกปุ่ม Notebook (Report Center) ตาม XPath จาก Recording
-        // XPath: //*[@id="main-topPanel"]/div[6]/div[7]/i
+        // คลิกปุ่ม Report Center
         await clickByXPath(page, '//*[@id="main-topPanel"]/div[6]/div[7]/i', 'Report Center Icon');
         
         // รอหน้าใหม่โหลด
         const reportPage = await newPagePromise;
         if (!reportPage) throw new Error("Report page did not open!");
         
+        // รอให้หน้าโหลดเสร็จจริง (แก้ปัญหาหน้าขาว)
+        await reportPage.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        // รอ Selector หลักของหน้า Report เพื่อยืนยันว่าโหลดเสร็จ
+        try {
+            await reportPage.waitForXPath('//*[@id="root"]', { timeout: 10000 });
+        } catch (e) {
+            console.log('Warning: Root element taking too long, continuing anyway...');
+        }
+        
         await reportPage.setViewport({ width: 1920, height: 1080 });
-        await reportPage.waitForNavigation({ waitUntil: 'networkidle0' }).catch(() => {});
-        console.log('   Switched to Report Page');
+        console.log(`   Switched to Report Page: ${reportPage.url()}`);
 
-        // ตั้งค่า Download ให้หน้าใหม่ด้วย (สำคัญมาก ไม่งั้นโหลดไม่ได้)
+        // ตั้งค่า Download ให้หน้าใหม่ (สำคัญมาก)
         const clientReport = await reportPage.target().createCDPSession();
         await clientReport.send('Page.setDownloadBehavior', {
             behavior: 'allow',
@@ -196,24 +210,19 @@ async function clickByXPath(page, xpath, description = 'Element') {
         // --- STEP 6: ตั้งค่ารายงาน (DMS) ---
         console.log('6. Configuring Report Filters...');
         
-        // 6.1 คลิกปุ่ม DMS Report (Icon คน)
-        // XPath: //*[@data-testid="FaceIcon"]/path หรือปุ่มที่ 2
-        // รอให้ปุ่มโหลดก่อน
+        // 6.1 คลิกปุ่ม DMS Report
         await new Promise(r => setTimeout(r, 2000));
         await clickByXPath(reportPage, '//button[contains(.,"รายงาน DMS")] | //*[@data-testid="FaceIcon"]/..', 'DMS Report Button');
 
-        // 6.2 เคลียร์รายการ (ตามที่คุณแจ้ง) และเลือก Dropdown
-        // คลิกที่ Dropdown เพื่อเปิดรายการ
+        // 6.2 เคลียร์รายการและเลือก Dropdown
         console.log('   Selecting Alerts...');
-        // XPath ของ Dropdown: //*[@id="root"]/.../tr[2]/td[2]/div/div
         await clickByXPath(reportPage, '//div[contains(@class, "css-xn5mga")]//tr[2]//td[2]//div/div', 'Alert Type Dropdown');
         
-        // รอ Dropdown Animation
         await new Promise(r => setTimeout(r, 1000));
 
-        // ฟังก์ชันเลือกรายการใน Dropdown
         const selectOption = async (optionText) => {
-            const [option] = await reportPage.$x(`//div[contains(@class, 'ant-select-item-option') and .//div[contains(text(), '${optionText}')]]`);
+            // ใช้ contains text ที่กว้างขึ้นเผื่อ class เปลี่ยน
+            const [option] = await reportPage.$x(`//div[contains(text(), '${optionText}')]`);
             if (option) {
                 await option.click();
                 console.log(`   Selected: ${optionText}`);
@@ -222,32 +231,24 @@ async function clickByXPath(page, xpath, description = 'Element') {
             }
         };
 
-        // *สมมติว่าต้องเคลียร์ของเก่าโดยการกดเลือกซ้ำ หรือกดปุ่มกากบาท (ถ้ามี)
-        // แต่ตาม Flow ปกติ ถ้ากดเลือกเพิ่ม มันจะเลือกเพิ่มให้เลย
         await selectOption('แจ้งเตือนการหาวนอน');
         await new Promise(r => setTimeout(r, 500));
         await selectOption('แจ้งเตือนการหลับตา');
         
-        // ปิด Dropdown (กด Escape)
         await reportPage.keyboard.press('Escape');
 
-        // 6.3 ตั้งค่าเวลา (06:00:00 - 18:00:00) ของวันนี้
-        const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+        // 6.3 ตั้งค่าเวลา
+        const today = new Date().toISOString().slice(0, 10);
         const startDateTime = `${today} 06:00:00`;
         const endDateTime = `${today} 18:00:00`;
         console.log(`   Setting Time: ${startDateTime} to ${endDateTime}`);
 
-        // กรอกเวลาเริ่ม (Start Date Input)
-        // XPath Input แถวที่ 3 คอลัมน์ 2
         const startInputXPath = '//div[contains(@class, "css-xn5mga")]//tr[3]//td[2]//input';
         await clickByXPath(reportPage, startInputXPath, 'Start Date Input');
-        // ลบค่าเก่า (Ctrl+A -> Del) แล้วพิมพ์ใหม่
         await reportPage.click('div.css-xn5mga tr:nth-of-type(3) td:nth-of-type(2) input', { clickCount: 3 });
         await reportPage.type('div.css-xn5mga tr:nth-of-type(3) td:nth-of-type(2) input', startDateTime);
         await reportPage.keyboard.press('Enter');
 
-        // กรอกเวลาสิ้นสุด (End Date Input)
-        // XPath Input แถวที่ 3 คอลัมน์ 4
         const endInputXPath = '//div[contains(@class, "css-xn5mga")]//tr[3]//td[4]//input';
         await clickByXPath(reportPage, endInputXPath, 'End Date Input');
         await reportPage.click('div.css-xn5mga tr:nth-of-type(3) td:nth-of-type(4) input', { clickCount: 3 });
@@ -256,22 +257,18 @@ async function clickByXPath(page, xpath, description = 'Element') {
 
         // 6.4 กดปุ่ม Search
         console.log('   Clicking Search...');
-        // XPath: //*[@data-testid="SearchIcon"]
         await clickByXPath(reportPage, '//*[@data-testid="SearchIcon"]', 'Search Button');
         
-        // รอผลการค้นหา (รอสัก 3-5 วินาที)
         await new Promise(r => setTimeout(r, 5000));
 
         // 6.5 กดปุ่ม EXCEL
         console.log('   Clicking EXCEL...');
-        // XPath: //button[text()="EXCEL"] หรือ class ที่มี Success
         await clickByXPath(reportPage, '//button[contains(text(), "EXCEL")] | //button[contains(@class, "MuiButton-containedSuccess")]', 'Excel Button');
         
-        // 6.6 รอ Popup และกด Save (Floppy Disk)
+        // 6.6 รอ Popup และกด Save
         console.log('   Waiting for Save/Download Dialog...');
-        // รอให้ปุ่ม Save ปรากฏ (ตาม Recording คือ SaveOutlinedIcon)
         await reportPage.waitForXPath('//*[@data-testid="SaveOutlinedIcon"]', { visible: true, timeout: 30000 });
-        await new Promise(r => setTimeout(r, 1000)); // รอ Animation
+        await new Promise(r => setTimeout(r, 1000));
         await clickByXPath(reportPage, '//*[@data-testid="SaveOutlinedIcon"]', 'Save Icon (Download)');
 
         // --- STEP 7: รอไฟล์ดาวน์โหลด ---
@@ -298,8 +295,11 @@ async function clickByXPath(page, xpath, description = 'Element') {
     } catch (error) {
         console.error('!!! PROCESS FAILED !!!', error);
         
-        // Screenshot หน้าจอที่มีปัญหา (เช็คว่าอยู่หน้าไหน)
-        const activePage = (browser.pages().length > 1) ? (await browser.pages())[1] : (await browser.pages())[0];
+        // Screenshot หน้าจอที่มีปัญหา
+        const pages = await browser.pages();
+        // พยายามหาหน้าล่าสุด (หน้าที่ active อยู่)
+        const activePage = pages[pages.length - 1]; 
+        
         const errorScreenshotPath = path.resolve(__dirname, 'error_debug.png');
         await activePage.screenshot({ path: errorScreenshotPath, fullPage: true });
         console.log(`   Saved screenshot to: ${errorScreenshotPath}`);
