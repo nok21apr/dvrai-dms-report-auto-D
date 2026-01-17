@@ -128,46 +128,72 @@ async function clickByXPath(page, xpath, description = 'Element') {
     page.setDefaultTimeout(60000);
 
     try {
-        // --- STEP 1: LOGIN ---
-        console.log('1. Navigating to login...');
-        await page.goto('https://dvrai.net/808gps/login.html', { waitUntil: 'networkidle0' });
+        // --- LOGIN LOOP WITH RETRY ---
+        let isLoggedIn = false;
+        const maxRetries = 20; // จำนวนครั้งสูงสุดที่จะลอง Login
 
-        // --- STEP 2: SOLVE CAPTCHA ---
-        console.log('2. Solving CAPTCHA...');
-        await page.waitForSelector('#lwm'); 
-        await new Promise(r => setTimeout(r, 2000));
-        
-        const captchaElement = await page.$('#lwm');
-        if (!captchaElement) throw new Error('Captcha element #lwm not found');
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                console.log(`\n>>> Login Attempt ${attempt}/${maxRetries} <<<`);
+                
+                // 1. ไปหน้า Login
+                await page.goto('https://dvrai.net/808gps/login.html', { waitUntil: 'networkidle0' });
 
-        const captchaImage = await captchaElement.screenshot();
-        
-        const worker = await Tesseract.createWorker('eng');
-        await worker.setParameters({ tessedit_char_whitelist: '0123456789' });
-        const { data: { text } } = await worker.recognize(captchaImage);
-        await worker.terminate();
-        
-        const captchaCode = text.trim().replace(/\s/g, '');
-        console.log(`   READ CAPTCHA: "${captchaCode}"`);
-        if (!captchaCode || captchaCode.length < 4) throw new Error(`Captcha reading failed: ${captchaCode}`);
+                // 2. อ่าน CAPTCHA
+                await page.waitForSelector('#lwm'); 
+                await new Promise(r => setTimeout(r, 2000)); // รอภาพโหลด
+                
+                const captchaElement = await page.$('#lwm');
+                if (!captchaElement) throw new Error('Captcha element #lwm not found');
 
-        // --- STEP 3: FILL LOGIN FORM ---
-        console.log('3. Filling credentials...');
-        await page.type('#loginAccount', config.gpsUser);
-        await page.type('#loginPassword', config.gpsPass);
-        await page.type('#phraseLogin', captchaCode);
+                const captchaImage = await captchaElement.screenshot();
+                
+                const worker = await Tesseract.createWorker('eng');
+                await worker.setParameters({ tessedit_char_whitelist: '0123456789' });
+                const { data: { text } } = await worker.recognize(captchaImage);
+                await worker.terminate();
+                
+                const captchaCode = text.trim().replace(/\s/g, '');
+                console.log(`   READ CAPTCHA: "${captchaCode}"`);
 
-        // --- STEP 4: SUBMIT LOGIN ---
-        console.log('4. Logging in...');
-        await Promise.all([
-            page.click('#loginSubmit'),
-            page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 15000 }).catch(() => console.log('Wait navigation timeout, continuing...'))
-        ]);
+                // ตรวจสอบความถูกต้องของ CAPTCHA เบื้องต้น
+                if (!captchaCode || captchaCode.length < 4) {
+                    console.warn(`   !!! Invalid Captcha (Length < 4). Retrying...`);
+                    continue; // ข้ามไปรอบถัดไปทันที
+                }
 
-        if (page.url().includes('login.html')) {
-             throw new Error('Login Failed (Still on login page)');
+                // 3. กรอกข้อมูล
+                await page.type('#loginAccount', config.gpsUser);
+                await page.type('#loginPassword', config.gpsPass);
+                await page.type('#phraseLogin', captchaCode);
+
+                // 4. กด Login
+                console.log('   Clicking Login...');
+                await Promise.all([
+                    page.click('#loginSubmit'),
+                    page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 5000 }).catch(() => {})
+                ]);
+
+                // 5. ตรวจสอบผลลัพธ์
+                const currentUrl = page.url();
+                if (currentUrl.includes('login.html')) {
+                    console.warn('   !!! Login Failed (Still on login page). Retrying...');
+                    continue; // ข้ามไปรอบถัดไป
+                } else {
+                    console.log('   SUCCESS: Login Successful!');
+                    isLoggedIn = true;
+                    break; // ออกจาก Loop
+                }
+
+            } catch (err) {
+                console.warn(`   Error during login attempt ${attempt}: ${err.message}`);
+                // วนรอบใหม่
+            }
         }
-        console.log('   Login Successful!');
+
+        if (!isLoggedIn) {
+            throw new Error(`Failed to login after ${maxRetries} attempts.`);
+        }
 
         // --- STEP 5: เข้าสู่หน้า Report Center (เปิด Tab ใหม่) ---
         console.log('5. Accessing Report Center...');
@@ -181,8 +207,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
             });
         });
         
-        // --- แก้ไขจุดคลิกปุ่ม Report Center (ใช้แบบ Robust) ---
-        // รวมทุกความเป็นไปได้: Title, OnClick, Class และ XPath เดิม
+        // --- จุดคลิกปุ่ม Report Center (ใช้แบบ Robust) ---
         const reportCenterXPath = `
             //div[@title="ศูนย์รายงาน"] | 
             //div[contains(@onclick, "showReportCenter")] | 
@@ -190,7 +215,6 @@ async function clickByXPath(page, xpath, description = 'Element') {
             //i[contains(@class, "fa-laptop")]/.. 
         `;
 
-        // รอให้ Element ปรากฏก่อนคลิก (เผื่อหน้าเว็บโหลดช้า)
         await page.waitForXPath(reportCenterXPath, { visible: true, timeout: 30000 });
         await clickByXPath(page, reportCenterXPath, 'Report Center Button (Laptop Icon)');
         
@@ -198,7 +222,6 @@ async function clickByXPath(page, xpath, description = 'Element') {
         const reportPage = await newPagePromise;
         if (!reportPage) throw new Error("Report page did not open!");
         
-        // รอให้หน้าโหลดเสร็จจริง
         await reportPage.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
         try {
             await reportPage.waitForXPath('//*[@id="root"]', { timeout: 10000 });
@@ -209,7 +232,6 @@ async function clickByXPath(page, xpath, description = 'Element') {
         await reportPage.setViewport({ width: 1920, height: 1080 });
         console.log(`   Switched to Report Page: ${reportPage.url()}`);
 
-        // ตั้งค่า Download ให้หน้าใหม่
         const clientReport = await reportPage.target().createCDPSession();
         await clientReport.send('Page.setDownloadBehavior', {
             behavior: 'allow',
