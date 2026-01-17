@@ -172,7 +172,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
         // --- STEP 5: เข้าสู่หน้า Report Center (เปิด Tab ใหม่) ---
         console.log('5. Accessing Report Center...');
         
-        // เตรียมดักจับ Popup ใหม่ที่แม่นยำขึ้น
+        // เตรียมดักจับ Popup ใหม่
         const newPagePromise = new Promise(resolve => {
             browser.once('targetcreated', async target => {
                 if (target.type() === 'page') {
@@ -181,16 +181,25 @@ async function clickByXPath(page, xpath, description = 'Element') {
             });
         });
         
-        // คลิกปุ่ม Report Center
-        await clickByXPath(page, '//*[@id="main-topPanel"]/div[6]/div[7]/i', 'Report Center Icon');
+        // --- แก้ไขจุดคลิกปุ่ม Report Center ตาม HTML ที่คุณให้มา ---
+        // HTML เป้าหมาย: <div title="ศูนย์รายงาน" class="header-nav-download-btn zh-btn" onclick="showReportCenter()">
+        // ใช้ XPath ที่เจาะจง attribute เหล่านี้โดยตรง
+        const reportCenterXPath = `
+            //div[@title="ศูนย์รายงาน"] | 
+            //div[contains(@onclick, "showReportCenter")] |
+            //div[contains(@class, "header-nav-download-btn")]
+        `;
+        
+        // รอให้ Element ปรากฏก่อนคลิก (เผื่อหน้าเว็บโหลดช้า)
+        await page.waitForXPath(reportCenterXPath, { visible: true, timeout: 30000 });
+        await clickByXPath(page, reportCenterXPath, 'Report Center Button (Laptop Icon)');
         
         // รอหน้าใหม่โหลด
         const reportPage = await newPagePromise;
         if (!reportPage) throw new Error("Report page did not open!");
         
-        // รอให้หน้าโหลดเสร็จจริง (แก้ปัญหาหน้าขาว)
+        // รอให้หน้าโหลดเสร็จจริง
         await reportPage.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => {});
-        // รอ Selector หลักของหน้า Report เพื่อยืนยันว่าโหลดเสร็จ
         try {
             await reportPage.waitForXPath('//*[@id="root"]', { timeout: 10000 });
         } catch (e) {
@@ -200,7 +209,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
         await reportPage.setViewport({ width: 1920, height: 1080 });
         console.log(`   Switched to Report Page: ${reportPage.url()}`);
 
-        // ตั้งค่า Download ให้หน้าใหม่ (สำคัญมาก)
+        // ตั้งค่า Download ให้หน้าใหม่
         const clientReport = await reportPage.target().createCDPSession();
         await clientReport.send('Page.setDownloadBehavior', {
             behavior: 'allow',
@@ -221,7 +230,6 @@ async function clickByXPath(page, xpath, description = 'Element') {
         await new Promise(r => setTimeout(r, 1000));
 
         const selectOption = async (optionText) => {
-            // ใช้ contains text ที่กว้างขึ้นเผื่อ class เปลี่ยน
             const [option] = await reportPage.$x(`//div[contains(text(), '${optionText}')]`);
             if (option) {
                 await option.click();
@@ -297,7 +305,6 @@ async function clickByXPath(page, xpath, description = 'Element') {
         
         // Screenshot หน้าจอที่มีปัญหา
         const pages = await browser.pages();
-        // พยายามหาหน้าล่าสุด (หน้าที่ active อยู่)
         const activePage = pages[pages.length - 1]; 
         
         const errorScreenshotPath = path.resolve(__dirname, 'error_debug.png');
