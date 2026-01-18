@@ -5,13 +5,14 @@ const fs = require('fs');
 const path = require('path');
 
 // --- CONFIGURATION ---
+// ใช้ค่าว่าง '' เป็น Fallback เพื่อป้องกัน Error: text is not a string
 const config = {
-    gpsUser: process.env.GPS_USER,
-    gpsPass: process.env.GPS_PASSWORD,
-    emailFrom: process.env.EMAIL_FROM,
-    emailPass: process.env.EMAIL_PASSWORD,
-    emailTo: process.env.EMAIL_TO,
-    downloadTimeout: 300000 // เพิ่มเป็น 5 นาที (เผื่อเน็ตช้า)
+    gpsUser: process.env.GPS_USER || '',
+    gpsPass: process.env.GPS_PASSWORD || '',
+    emailFrom: process.env.EMAIL_FROM || '',
+    emailPass: process.env.EMAIL_PASSWORD || '',
+    emailTo: process.env.EMAIL_TO || '',
+    downloadTimeout: 300000 // 5 นาที
 };
 
 const downloadPath = path.resolve(__dirname, 'downloads');
@@ -30,11 +31,9 @@ async function waitForFileToDownload(dir, timeout) {
 
         const checker = setInterval(() => {
             const files = fs.readdirSync(dir);
-            // หาไฟล์ที่โหลดเสร็จแล้ว (ไม่ใช่นามสกุล .crdownload หรือ .tmp)
             const file = files.find(f => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && fs.statSync(path.join(dir, f)).isFile());
 
             if (file) {
-                // เช็คให้ชัวร์ว่าไฟล์นิ่งแล้ว (ขนาดไม่เปลี่ยน)
                 const filePath = path.join(dir, file);
                 const size1 = fs.statSync(filePath).size;
                 setTimeout(() => {
@@ -46,7 +45,7 @@ async function waitForFileToDownload(dir, timeout) {
                             resolve(filePath);
                         }
                     }
-                }, 3000); // รอเช็คขนาดอีก 3 วิ
+                }, 3000);
             }
 
             timePassed += checkInterval;
@@ -95,7 +94,7 @@ async function sendEmail(subject, message, attachmentPath = null) {
     }
 }
 
-// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath (รับ timeout ได้ Default = 10วิ)
+// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath
 async function clickByXPath(page, xpath, description = 'Element', timeout = 10000) {
     try {
         const selector = xpath.startsWith('xpath/') ? xpath : `xpath/${xpath}`;
@@ -114,6 +113,12 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
 
 (async () => {
     console.log(`--- Started GPS Report Automation [${new Date().toLocaleString()}] ---`);
+    
+    // ตรวจสอบค่า Config ก่อนเริ่ม (เพื่อแจ้งเตือนชัดเจน)
+    if (!config.gpsUser || !config.gpsPass) {
+        console.warn("WARNING: GPS_USER or GPS_PASSWORD is missing. Login usually fails without these.");
+    }
+
     const browser = await puppeteer.launch({
         headless: "new",
         ignoreHTTPSErrors: true, 
@@ -144,8 +149,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         'Accept-Language': 'th-TH,th;q=0.9,en;q=0.8'
     });
     
-    // --- ตั้งค่า Download Behavior แบบ Global ผ่าน CDP ---
-    // พยายามบังคับให้ทุกหน้ายอมรับการ Download
+    // --- ตั้งค่า Download Behavior ผ่าน CDP (ใส่ Try-Catch ป้องกัน Error) ---
     try {
         const client = await page.target().createCDPSession();
         await client.send('Page.setDownloadBehavior', {
@@ -157,18 +161,24 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             downloadPath: downloadPath,
             eventsEnabled: true 
         }); 
-    } catch(e) { console.log('CDP Setup Warning:', e.message); }
+    } catch(e) { 
+        console.log('Warning: CDP Setup failed (Non-critical):', e.message); 
+    }
 
-    // ให้สิทธิ์ Automatic Downloads กับเว็บนี้โดยเฉพาะ
-    const context = browser.defaultBrowserContext();
-    await context.overridePermissions('http://cctvwli.com:3001', ['automatic-downloads']);
+    // --- ให้สิทธิ์ Automatic Downloads (ใส่ Try-Catch ป้องกัน Error) ---
+    try {
+        const context = browser.defaultBrowserContext();
+        await context.overridePermissions('http://cctvwli.com:3001', ['automatic-downloads']);
+    } catch(e) {
+        console.log('Warning: Permission override failed (Non-critical):', e.message);
+    }
 
     page.setDefaultTimeout(60000);
 
     try {
         // --- LOGIN LOOP WITH RETRY ---
         let isLoggedIn = false;
-        const maxRetries = 20; // จำนวนครั้งสูงสุดที่จะลอง Login
+        const maxRetries = 20;
 
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
@@ -198,7 +208,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                     continue; 
                 }
 
-                // 3. กรอกข้อมูล
+                // 3. กรอกข้อมูล (ถ้าไม่มีค่า จะไม่ Error เพราะเราใส่ Fallback ไว้ข้างบนแล้ว)
                 await page.type('#loginAccount', config.gpsUser);
                 await page.type('#loginPassword', config.gpsPass);
                 await page.type('#phraseLogin', captchaCode);
@@ -248,7 +258,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                 reportPage = currentPages[currentPages.length - 1]; 
                 console.log(`   >>> New tab detected! URL: ${reportPage.url()}`);
                 
-                // ตรวจสอบหน้าแดง (Warning Page)
                 const pageTitle = await reportPage.title();
                 console.log(`   Page Title: ${pageTitle}`);
                 
@@ -310,19 +319,19 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await reportPage.setViewport({ width: 1920, height: 1080 });
         console.log(`   Switched to Report Page: ${reportPage.url()}`);
 
-        // *** ตั้งค่า Download Path ให้หน้า Report Page ด้วย ***
-        const clientReport = await reportPage.target().createCDPSession();
-        await clientReport.send('Page.setDownloadBehavior', {
-            behavior: 'allow',
-            downloadPath: downloadPath,
-        });
+        // *** ตั้งค่า Download Path ให้หน้า Report Page ด้วย (ใส่ Try-Catch) ***
         try {
+            const clientReport = await reportPage.target().createCDPSession();
+            await clientReport.send('Page.setDownloadBehavior', {
+                behavior: 'allow',
+                downloadPath: downloadPath,
+            });
             await clientReport.send('Browser.setDownloadBehavior', { 
                 behavior: 'allow', 
                 downloadPath: downloadPath, 
                 eventsEnabled: true 
             });
-        } catch (e) {}
+        } catch (e) { console.log('Report Page CDP warning:', e.message); }
 
 
         // --- STEP 6: ตั้งค่ารายงาน (DMS) ---
