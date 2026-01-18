@@ -420,37 +420,32 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await reportPage.keyboard.type(endDateTime);
         await reportPage.keyboard.press('Enter');
 
-        // 6.4 กดปุ่ม Search (แก้ไข: ใช้ JS Click เป็นไม้ตาย)
+        // 6.4 กดปุ่ม Search
         console.log('   Clicking Search...');
         await new Promise(r => setTimeout(r, 2000));
         
         const searchSuccess = await reportPage.evaluate(() => {
-            // ลองหาด้วย data-testid
             const icon = document.querySelector('[data-testid="SearchIcon"]');
             if (icon) {
-                // หาปุ่มแม่ของ icon (button element)
                 let btn = icon.closest('button');
                 if (btn) {
                     btn.click();
                     return 'Clicked via data-testid';
                 }
             }
-            
-            // ลองหาด้วย class css ที่คุณให้มา
             const cssBtn = document.querySelector('.css-1hw9j7s');
             if (cssBtn) {
                 cssBtn.click();
                 return 'Clicked via CSS class';
             }
-            
-            return null; // หาไม่เจอ
+            return null;
         });
 
         if (searchSuccess) {
             console.log(`   Search Clicked Successfully (${searchSuccess})`);
         } else {
             console.warn('   JS Click Search failed. Trying XPath fallback...');
-            // Fallback ใช้ XPath เดิมแต่เพิ่ม timeout
+            // ใช้ timeout 60 วิ
             const searchButtonXPath = '//*[@data-testid="SearchIcon"]/..';
             await clickByXPath(reportPage, searchButtonXPath, 'Search Button', 60000);
         }
@@ -459,10 +454,50 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         console.log('   Waiting 120 seconds for report generation...');
         await new Promise(r => setTimeout(r, 120000));
 
-        // 6.5 กดปุ่ม EXCEL
+        // 6.5 กดปุ่ม EXCEL (แก้ไข: ใช้ JS Click เป็นไม้ตาย + เพิ่ม Retry)
         console.log('   Clicking EXCEL...');
-        // เพิ่ม timeout ให้ปุ่ม Excel เผื่อไว้ด้วย
-        await clickByXPath(reportPage, '//button[contains(text(), "EXCEL")] | //button[contains(@class, "MuiButton-containedSuccess")]', 'Excel Button', 60000);
+        
+        let excelClicked = false;
+        // ลองกด 3 ครั้ง (Retry Loop)
+        for (let i = 1; i <= 3; i++) {
+            if (excelClicked) break;
+            console.log(`      Attempt ${i} to click EXCEL...`);
+            
+            // 1. ลองใช้ JS Click (แม่นยำที่สุด)
+            const jsExcel = await reportPage.evaluate(() => {
+                // หาปุ่มที่มีคำว่า EXCEL
+                const buttons = Array.from(document.querySelectorAll('button'));
+                const excelBtn = buttons.find(b => b.textContent.includes('EXCEL'));
+                if (excelBtn) {
+                    excelBtn.click();
+                    return true;
+                }
+                // หาปุ่มสีเขียว (Success button)
+                const successBtn = document.querySelector('button.MuiButton-containedSuccess');
+                if (successBtn) {
+                    successBtn.click();
+                    return true;
+                }
+                return false;
+            });
+
+            if (jsExcel) {
+                console.log('      EXCEL Clicked via JS!');
+                excelClicked = true;
+            } else {
+                // 2. ถ้า JS ไม่เจอ ลองใช้ XPath (Wait 10s)
+                try {
+                    await clickByXPath(reportPage, '//button[contains(text(), "EXCEL")] | //button[contains(@class, "MuiButton-containedSuccess")]', 'Excel Button', 10000);
+                    excelClicked = true;
+                } catch (e) {
+                    console.log(`      XPath click failed on attempt ${i}`);
+                }
+            }
+            
+            if (!excelClicked) await new Promise(r => setTimeout(r, 5000)); // รอ 5 วิแล้วลองใหม่
+        }
+
+        if (!excelClicked) throw new Error('Failed to click EXCEL button after multiple attempts.');
         
         // 6.6 รอ Popup และกด Save
         console.log('   Waiting for Save/Download Dialog...');
