@@ -121,6 +121,11 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             '--disable-features=IsolateOrigins,site-per-process',
             '--disable-site-isolation-trials',
             '--disable-client-side-phishing-detection',
+            // --- เพิ่มคำสั่งปิด Safe Browsing เพื่อแก้ปัญหาโหลดไฟล์ไม่ได้ ---
+            '--safebrowsing-disable-download-protection',
+            '--safebrowsing-disable-auto-update',
+            '--disable-features=SafeBrowsing',
+            // --------------------------------------------------------
             '--no-first-run',
             '--no-default-browser-check',
             '--lang=th-TH' // *** บังคับภาษาไทย ***
