@@ -403,7 +403,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
 
         // --- เพิ่มการกด Tab และ Enter เพื่อ Search ---
         console.log('   Pressing Tab + Enter to Search...');
-        await new Promise(r => setTimeout(r, 500)); // รอสักนิดหลังกรอกวันที่
+        await new Promise(r => setTimeout(r, 500)); 
         await reportPage.keyboard.press('Tab'); // กด Tab 1 ครั้ง
         await new Promise(r => setTimeout(r, 300));
         await reportPage.keyboard.press('Enter'); // กด Enter เพื่อ Search
@@ -411,43 +411,18 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         console.log('   Waiting 120s for report generation...');
         await new Promise(r => setTimeout(r, 120000));
 
-        // 6.5 กดปุ่ม EXCEL
-        console.log('   Clicking EXCEL...');
+        // 6.5 กดปุ่ม EXCEL (แก้ไข: ใช้ Tab + Enter ตามคำสั่ง)
+        console.log('   Clicking EXCEL (via Keyboard Tab+Enter)...');
         
-        // เช็คก่อนว่าปุ่ม Excel เป็นสีเทา (Disabled) หรือไม่
-        const isExcelDisabled = await reportPage.evaluate(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const excelBtn = buttons.find(b => b.textContent.includes('EXCEL'));
-            return excelBtn ? excelBtn.disabled : true;
-        });
+        // เราเพิ่งกด Search ไป (ซึ่งน่าจะยัง Focus อยู่ที่ปุ่ม Search)
+        // ตามที่คุณบอก: "หลังจาก เลือกSEARCH เสร็จสิ้นแล้ว ให้ กด tab 1 ครั้ง ซึ่งมันจะตรงกับปุ่ม EXCEL ครับและ กด enter ครับ"
+        
+        await reportPage.keyboard.press('Tab');
+        await new Promise(r => setTimeout(r, 500));
+        await reportPage.keyboard.press('Enter');
+        
+        console.log('   Pressed Enter on EXCEL button!');
 
-        if (isExcelDisabled) {
-            throw new Error("EXCEL button is DISABLED (Grey). Report data might be empty or Search failed.");
-        }
-
-        let excelClicked = false;
-        for (let i = 1; i <= 3; i++) {
-            if (excelClicked) break;
-            const jsExcel = await reportPage.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                const excelBtn = buttons.find(b => b.textContent.includes('EXCEL'));
-                if (excelBtn) { excelBtn.click(); return true; }
-                const successBtn = document.querySelector('button.MuiButton-containedSuccess');
-                if (successBtn) { successBtn.click(); return true; }
-                return false;
-            });
-
-            if (jsExcel) excelClicked = true;
-            else {
-                try {
-                    await clickByXPath(reportPage, '//button[contains(text(), "EXCEL")] | //button[contains(@class, "MuiButton-containedSuccess")]', 'Excel Button', 10000);
-                    excelClicked = true;
-                } catch (e) {}
-            }
-            if (!excelClicked) await new Promise(r => setTimeout(r, 5000));
-        }
-
-        if (!excelClicked) throw new Error('Failed to click EXCEL button.');
         
         // SAVE
         console.log('   Waiting 20s for Save Dialog...');
