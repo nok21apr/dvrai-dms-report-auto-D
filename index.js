@@ -169,9 +169,14 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         'Accept-Language': 'th-TH,th;q=0.9,en;q=0.8'
     });
     
-    // ตั้งค่า Download Behavior ผ่าน CDP (Browser Level)
+    // --- ตั้งค่า Download Behavior ผ่าน CDP (ใส่ทั้ง Page และ Browser Level) ---
     try {
         const client = await page.target().createCDPSession();
+        // เพิ่ม Page.setDownloadBehavior กลับเข้ามา
+        await client.send('Page.setDownloadBehavior', {
+            behavior: 'allow',
+            downloadPath: downloadPath,
+        });
         await client.send('Browser.setDownloadBehavior', {
             behavior: 'allow',
             downloadPath: downloadPath,
@@ -301,9 +306,14 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         
         await reportPage.setViewport({ width: 1920, height: 1080 });
 
-        // *** ตั้งค่า Download Path ให้หน้า Report Page ***
+        // *** ตั้งค่า Download Path ให้หน้า Report Page (ใส่ทั้ง Page และ Browser Level) ***
         try {
             const clientReport = await reportPage.target().createCDPSession();
+            // เพิ่ม Page.setDownloadBehavior สำหรับหน้าใหม่ด้วย
+            await clientReport.send('Page.setDownloadBehavior', {
+                behavior: 'allow',
+                downloadPath: downloadPath,
+            });
             await clientReport.send('Browser.setDownloadBehavior', { 
                 behavior: 'allow', 
                 downloadPath: downloadPath, 
