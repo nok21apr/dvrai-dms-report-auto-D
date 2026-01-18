@@ -12,7 +12,8 @@ const config = {
     emailFrom: process.env.EMAIL_FROM || '',
     emailPass: process.env.EMAIL_PASSWORD || '',
     emailTo: process.env.EMAIL_TO || '',
-    downloadTimeout: 300000 // 5 นาที
+    // ลดเวลา downloadTimeout เหลือ 20 วินาที (ตามคำขอ) + เผื่อ buffer นิดหน่อยเป็น 30วิ
+    downloadTimeout: 30000 
 };
 
 // กำหนด Path หลักที่เราต้องการ (ใน Project folder)
@@ -194,10 +195,14 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
     // --- ตั้งค่า Download Behavior ผ่าน CDP (ใส่ทั้ง Page และ Browser Level) ---
     try {
         const client = await page.target().createCDPSession();
+        
+        // 1. Page Level
         await client.send('Page.setDownloadBehavior', {
             behavior: 'allow',
             downloadPath: downloadPath,
         });
+        
+        // 2. Browser Level (Experimental but effective)
         await client.send('Browser.setDownloadBehavior', {
             behavior: 'allow',
             downloadPath: downloadPath,
@@ -205,6 +210,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         }); 
     } catch(e) { console.log('CDP Setup Warning:', e.message); }
 
+    // Override Permissions
     try {
         const context = browser.defaultBrowserContext();
         await context.overridePermissions('http://cctvwli.com:3001', ['automatic-downloads']);
@@ -302,7 +308,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                 const jsResult = await page.evaluate(() => {
                     if (typeof showReportCenter === 'function') {
                         showReportCenter();
-                        return 'Executed showReportCenter() directly';
+                        return 'Executed showReportCenter()';
                     } else {
                         const btn = document.querySelector('div[onclick*="showReportCenter"]') || 
                                     document.querySelector('#main-topPanel > div.header-nav > div:nth-child(7)');
@@ -326,9 +332,10 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         
         await reportPage.setViewport({ width: 1920, height: 1080 });
 
-        // *** ตั้งค่า Download Path ให้หน้า Report Page ***
+        // *** ตั้งค่า Download Path ให้หน้า Report Page (ใส่ทั้ง Page และ Browser Level) ***
         try {
             const clientReport = await reportPage.target().createCDPSession();
+            // เพิ่ม Page.setDownloadBehavior สำหรับหน้าใหม่ด้วย
             await clientReport.send('Page.setDownloadBehavior', {
                 behavior: 'allow',
                 downloadPath: downloadPath,
@@ -473,6 +480,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         // --- STEP 7: Wait for Download (เช็คทั้ง 2 โฟลเดอร์) ---
         console.log('7. Waiting for file download...');
         // ส่งแค่ timeout (path ถูก hardcode ใน function เพื่อความชัวร์)
+        // **ใช้เวลาที่ตั้งไว้ใหม่ (20s) หรือตาม config**
         let downloadedFile = await waitForFileToDownload(config.downloadTimeout);
         console.log(`   File downloaded: ${downloadedFile}`);
 
