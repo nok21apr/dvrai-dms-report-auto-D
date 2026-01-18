@@ -420,23 +420,42 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await reportPage.keyboard.type(endDateTime);
         await reportPage.keyboard.press('Enter');
 
-        // 6.4 กดปุ่ม Search (แก้ไข: ใช้ Selector ใหม่ + เพิ่ม Timeout 60 วินาที)
+        // 6.4 กดปุ่ม Search (แก้ไข: ใช้ JS Click เป็นไม้ตาย)
         console.log('   Clicking Search...');
-        // รอสักพักให้ UI นิ่งก่อนกด
         await new Promise(r => setTimeout(r, 2000));
         
-        // Selector ที่คุณให้มา:
-        // XPath: //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1]
+        const searchSuccess = await reportPage.evaluate(() => {
+            // ลองหาด้วย data-testid
+            const icon = document.querySelector('[data-testid="SearchIcon"]');
+            if (icon) {
+                // หาปุ่มแม่ของ icon (button element)
+                let btn = icon.closest('button');
+                if (btn) {
+                    btn.click();
+                    return 'Clicked via data-testid';
+                }
+            }
+            
+            // ลองหาด้วย class css ที่คุณให้มา
+            const cssBtn = document.querySelector('.css-1hw9j7s');
+            if (cssBtn) {
+                cssBtn.click();
+                return 'Clicked via CSS class';
+            }
+            
+            return null; // หาไม่เจอ
+        });
+
+        if (searchSuccess) {
+            console.log(`   Search Clicked Successfully (${searchSuccess})`);
+        } else {
+            console.warn('   JS Click Search failed. Trying XPath fallback...');
+            // Fallback ใช้ XPath เดิมแต่เพิ่ม timeout
+            const searchButtonXPath = '//*[@data-testid="SearchIcon"]/..';
+            await clickByXPath(reportPage, searchButtonXPath, 'Search Button', 60000);
+        }
         
-        const searchButtonXPath = `
-            //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1] |
-            //*[@data-testid="SearchIcon"]
-        `;
-        
-        // เพิ่ม Timeout เป็น 60 วินาที สำหรับการหากดปุ่ม Search
-        await clickByXPath(reportPage, searchButtonXPath, 'Search Button', 60000);
-        
-        // --- รอรายงานโหลด 120 วินาที (Hard Wait) ตามที่คุณแนะนำ ---
+        // --- รอรายงานโหลด 120 วินาที (Hard Wait) ---
         console.log('   Waiting 120 seconds for report generation...');
         await new Promise(r => setTimeout(r, 120000));
 
