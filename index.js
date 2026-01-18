@@ -191,8 +191,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         'Accept-Language': 'th-TH,th;q=0.9,en;q=0.8'
     });
     
-    // --- ตั้งค่า Download Behavior (Global & Default) ---
-    // พยายามตั้งค่าทั้ง Path ที่กำหนดเอง และปล่อย Default ให้ Chrome จัดการ
+    // --- ตั้งค่า Download Behavior ผ่าน CDP (ใส่ทั้ง Page และ Browser Level) ---
     try {
         const client = await page.target().createCDPSession();
         await client.send('Page.setDownloadBehavior', {
@@ -303,11 +302,11 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                 const jsResult = await page.evaluate(() => {
                     if (typeof showReportCenter === 'function') {
                         showReportCenter();
-                        return 'Executed showReportCenter()';
+                        return 'Executed showReportCenter() directly';
                     } else {
                         const btn = document.querySelector('div[onclick*="showReportCenter"]') || 
                                     document.querySelector('#main-topPanel > div.header-nav > div:nth-child(7)');
-                        if (btn) { btn.click(); return 'Clicked element'; }
+                        if (btn) { btn.click(); return 'Clicked element via JS'; }
                     }
                     return null;
                 });
@@ -474,8 +473,30 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         // --- STEP 7: Wait for Download (เช็คทั้ง 2 โฟลเดอร์) ---
         console.log('7. Waiting for file download...');
         // ส่งแค่ timeout (path ถูก hardcode ใน function เพื่อความชัวร์)
-        const downloadedFile = await waitForFileToDownload(config.downloadTimeout);
+        let downloadedFile = await waitForFileToDownload(config.downloadTimeout);
         console.log(`   File downloaded: ${downloadedFile}`);
+
+        // --- FIX: Rename file to .xls if missing extension ---
+        const ext = path.extname(downloadedFile);
+        if (!ext || (ext !== '.xls' && ext !== '.xlsx')) {
+            console.log(`   File extension is '${ext}'. Renaming to .xls for compatibility...`);
+            const dir = path.dirname(downloadedFile);
+            const newName = `GPS_Report_${today}.xls`;
+            const newFilePath = path.join(dir, newName);
+            
+            // ลบไฟล์เก่าทิ้งถ้ามี
+            if (fs.existsSync(newFilePath)) {
+                try { fs.unlinkSync(newFilePath); } catch(e) {}
+            }
+
+            try {
+                fs.renameSync(downloadedFile, newFilePath);
+                downloadedFile = newFilePath;
+                console.log(`   Renamed file to: ${downloadedFile}`);
+            } catch (e) {
+                console.error(`   Rename failed: ${e.message}. Sending original file.`);
+            }
+        }
 
         // --- STEP 8: Email ---
         console.log(`8. Sending Email...`);
