@@ -466,8 +466,8 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         // --- STEP 8: Email ---
         console.log(`8. Sending Email...`);
         await sendEmail(
-            `GPS Report: ${today}`, 
-            `Please find the attached daily GPS report.`, 
+            `THAI TRACKING DMS REPORT: ${today}`, 
+            `รายงาน THAI TRACKING DMS REPORT รอบ 06:00 ถึง 18:00 น.`, 
             downloadedFile
         );
 
