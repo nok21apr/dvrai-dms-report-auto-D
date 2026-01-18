@@ -3,6 +3,7 @@ const Tesseract = require('tesseract.js');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
+const os = require('os'); // เพิ่ม os module
 
 // --- CONFIGURATION ---
 const config = {
@@ -14,56 +15,79 @@ const config = {
     downloadTimeout: 300000 // 5 นาที
 };
 
+// กำหนด Path หลักที่เราต้องการ (ใน Project folder)
 const downloadPath = path.resolve(__dirname, 'downloads');
+// กำหนด Path สำรอง (Default Downloads ของ User)
+const defaultDownloadPath = path.join(os.homedir(), 'Downloads');
 
 // สร้างโฟลเดอร์ download ถ้ายังไม่มี
 if (!fs.existsSync(downloadPath)) {
     fs.mkdirSync(downloadPath);
 }
 
-// ฟังก์ชันรอจนกว่าไฟล์จะโหลดเสร็จ (ปรับปรุงใหม่)
-async function waitForFileToDownload(dir, timeout) {
+// ฟังก์ชันรอจนกว่าไฟล์จะโหลดเสร็จ (ปรับปรุงใหม่: เช็ค 2 โฟลเดอร์)
+async function waitForFileToDownload(timeout) {
     return new Promise((resolve, reject) => {
         let timer;
         const checkInterval = 2000;
         let timePassed = 0;
 
-        console.log(`   Waiting for file in: ${dir}`);
+        console.log(`   Waiting for file in:`);
+        console.log(`      1. ${downloadPath}`);
+        console.log(`      2. ${defaultDownloadPath}`);
 
         const checker = setInterval(() => {
-            const files = fs.readdirSync(dir);
-            // แสดงรายการไฟล์เพื่อ Debug
-            if (files.length > 0) console.log(`      Files in dir: ${files.join(', ')}`);
+            // เช็คทั้ง 2 โฟลเดอร์
+            const dirsToCheck = [downloadPath];
+            if (fs.existsSync(defaultDownloadPath)) {
+                dirsToCheck.push(defaultDownloadPath);
+            }
 
-            const latestFile = files
-                .map(file => ({ name: file, time: fs.statSync(path.join(dir, file)).mtime.getTime() }))
-                .sort((a, b) => b.time - a.time)[0];
+            let foundFile = null;
+            let foundDir = null;
 
-            if (latestFile) {
-                const filename = latestFile.name;
-                const filePath = path.join(dir, filename);
-
-                // ถ้าเป็นไฟล์ชั่วคราว หรือไฟล์ที่ Chrome กำลังกันไว้ (.crdownload)
-                if (filename.endsWith('.crdownload') || filename.endsWith('.tmp')) {
-                    console.log(`      Found pending download: ${filename}. Waiting for completion...`);
-                } else {
-                    // ไฟล์ปกติ
-                    const size1 = fs.statSync(filePath).size;
-                    if (size1 > 0) {
-                        // รอเช็คว่าขนาดไฟล์นิ่งหรือไม่ (โหลดเสร็จจริง)
-                        setTimeout(() => {
-                            if (fs.existsSync(filePath)) {
-                                const size2 = fs.statSync(filePath).size;
-                                if (size1 === size2) {
-                                    clearInterval(checker);
-                                    clearTimeout(timer);
-                                    console.log(`      File confirmed: ${filename}`);
-                                    resolve(filePath);
-                                }
+            for (const dir of dirsToCheck) {
+                try {
+                    const files = fs.readdirSync(dir);
+                    if (files.length > 0) {
+                        // หาไฟล์ล่าสุดที่ไม่ใช่ .crdownload, .tmp และไม่ใช่ไฟล์ระบบ (.)
+                        const validFiles = files.filter(f => !f.startsWith('.') && !f.endsWith('.crdownload') && !f.endsWith('.tmp'));
+                        
+                        if (validFiles.length > 0) {
+                            // เรียงตามเวลาล่าสุด
+                            const latest = validFiles
+                                .map(f => ({ name: f, path: path.join(dir, f), time: fs.statSync(path.join(dir, f)).mtime.getTime() }))
+                                .sort((a, b) => b.time - a.time)[0];
+                            
+                            // ถ้าเจอไฟล์ที่เพิ่งสร้างในระยะเวลาที่รัน Script นี้
+                            if (latest && (Date.now() - latest.time < timeout + 60000)) { 
+                                foundFile = latest;
+                                foundDir = dir;
+                                break;
                             }
-                        }, 3000);
-                        return;
+                        }
                     }
+                } catch (e) { /* Ignore access errors */ }
+            }
+
+            if (foundFile) {
+                const filePath = foundFile.path;
+                const size1 = fs.statSync(filePath).size;
+                
+                if (size1 > 0) {
+                    console.log(`      Found potential file: ${foundFile.name} in ${foundDir}`);
+                    setTimeout(() => {
+                        if (fs.existsSync(filePath)) {
+                            const size2 = fs.statSync(filePath).size;
+                            if (size1 === size2) {
+                                clearInterval(checker);
+                                clearTimeout(timer);
+                                console.log(`      File confirmed: ${filePath}`);
+                                resolve(filePath);
+                            }
+                        }
+                    }, 3000);
+                    return;
                 }
             }
 
@@ -71,7 +95,7 @@ async function waitForFileToDownload(dir, timeout) {
             if (timePassed >= timeout) {
                 clearInterval(checker);
                 clearTimeout(timer);
-                reject(new Error(`Download timeout (${timeout}ms). Files found: ${files.join(', ')}`));
+                reject(new Error(`Download timeout (${timeout}ms). No new files found.`));
             }
         }, checkInterval);
     });
@@ -149,14 +173,12 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             '--ignore-certificate-errors',
             '--unsafely-treat-insecure-origin-as-secure=http://cctvwli.com:3001',
             '--disable-web-security', 
-            // --- ปิด Safe Browsing และ Download Bubble (สำคัญมาก) ---
             '--disable-features=IsolateOrigins,site-per-process,SafeBrowsing,DownloadBubble,DownloadBubbleV2',
             '--disable-site-isolation-trials',
             '--disable-client-side-phishing-detection',
             '--safebrowsing-disable-auto-update',
             '--safebrowsing-disable-download-protection',
             '--safebrowsing-disable-extension-blacklist',
-            // -----------------------------------------------------
             '--no-first-run',
             '--no-default-browser-check',
             '--lang=th-TH' 
@@ -169,10 +191,10 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         'Accept-Language': 'th-TH,th;q=0.9,en;q=0.8'
     });
     
-    // --- ตั้งค่า Download Behavior ผ่าน CDP (ใส่ทั้ง Page และ Browser Level) ---
+    // --- ตั้งค่า Download Behavior (Global & Default) ---
+    // พยายามตั้งค่าทั้ง Path ที่กำหนดเอง และปล่อย Default ให้ Chrome จัดการ
     try {
         const client = await page.target().createCDPSession();
-        // เพิ่ม Page.setDownloadBehavior กลับเข้ามา
         await client.send('Page.setDownloadBehavior', {
             behavior: 'allow',
             downloadPath: downloadPath,
@@ -184,7 +206,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         }); 
     } catch(e) { console.log('CDP Setup Warning:', e.message); }
 
-    // Override Permissions
     try {
         const context = browser.defaultBrowserContext();
         await context.overridePermissions('http://cctvwli.com:3001', ['automatic-downloads']);
@@ -306,10 +327,9 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         
         await reportPage.setViewport({ width: 1920, height: 1080 });
 
-        // *** ตั้งค่า Download Path ให้หน้า Report Page (ใส่ทั้ง Page และ Browser Level) ***
+        // *** ตั้งค่า Download Path ให้หน้า Report Page ***
         try {
             const clientReport = await reportPage.target().createCDPSession();
-            // เพิ่ม Page.setDownloadBehavior สำหรับหน้าใหม่ด้วย
             await clientReport.send('Page.setDownloadBehavior', {
                 behavior: 'allow',
                 downloadPath: downloadPath,
@@ -451,9 +471,10 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             await clickByXPath(reportPage, saveXPath, 'Save Icon', 60000);
         }
 
-        // --- STEP 7: Wait for Download ---
+        // --- STEP 7: Wait for Download (เช็คทั้ง 2 โฟลเดอร์) ---
         console.log('7. Waiting for file download...');
-        const downloadedFile = await waitForFileToDownload(downloadPath, config.downloadTimeout);
+        // ส่งแค่ timeout (path ถูก hardcode ใน function เพื่อความชัวร์)
+        const downloadedFile = await waitForFileToDownload(config.downloadTimeout);
         console.log(`   File downloaded: ${downloadedFile}`);
 
         // --- STEP 8: Email ---
