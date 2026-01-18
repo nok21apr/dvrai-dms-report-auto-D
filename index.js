@@ -30,12 +30,21 @@ async function waitForFileToDownload(dir, timeout) {
 
         const checker = setInterval(() => {
             const files = fs.readdirSync(dir);
+            // หาไฟล์ที่โหลดเสร็จแล้ว (ไม่ใช่นามสกุล .crdownload หรือ .tmp)
             const file = files.find(f => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && fs.statSync(path.join(dir, f)).isFile());
 
             if (file) {
-                clearInterval(checker);
-                clearTimeout(timer);
-                resolve(path.join(dir, file));
+                // เช็คให้ชัวร์ว่าไฟล์นิ่งแล้ว (ขนาดไม่เปลี่ยน)
+                const filePath = path.join(dir, file);
+                const size1 = fs.statSync(filePath).size;
+                setTimeout(() => {
+                    const size2 = fs.statSync(filePath).size;
+                    if (size1 === size2 && size1 > 0) {
+                        clearInterval(checker);
+                        clearTimeout(timer);
+                        resolve(filePath);
+                    }
+                }, 2000); // รอเช็คขนาดอีก 2 วิ
             }
 
             timePassed += checkInterval;
@@ -87,10 +96,7 @@ async function sendEmail(subject, message, attachmentPath = null) {
 // ฟังก์ชันช่วยคลิก Element โดยใช้ XPath (รับ timeout ได้ Default = 10วิ)
 async function clickByXPath(page, xpath, description = 'Element', timeout = 10000) {
     try {
-        // แปลง XPath ให้เป็น Selector แบบใหม่
         const selector = xpath.startsWith('xpath/') ? xpath : `xpath/${xpath}`;
-        
-        // ใช้ timeout ที่ส่งเข้ามา
         await page.waitForSelector(selector, { timeout: timeout, visible: true });
         const elements = await page.$$(selector);
         if (elements.length > 0) {
@@ -108,7 +114,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
     console.log(`--- Started GPS Report Automation [${new Date().toLocaleString()}] ---`);
     const browser = await puppeteer.launch({
         headless: "new",
-        ignoreHTTPSErrors: true, // ข้าม Error ใบรับรองความปลอดภัย
+        ignoreHTTPSErrors: true, 
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox',
@@ -121,30 +127,40 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             '--disable-features=IsolateOrigins,site-per-process',
             '--disable-site-isolation-trials',
             '--disable-client-side-phishing-detection',
-            // --- เพิ่มคำสั่งปิด Safe Browsing เพื่อแก้ปัญหาโหลดไฟล์ไม่ได้ ---
-            '--safebrowsing-disable-download-protection',
+            // --- เพิ่ม Arguments ปิด Safe Browsing แบบจัดเต็ม ---
             '--safebrowsing-disable-auto-update',
+            '--safebrowsing-disable-download-protection',
             '--disable-features=SafeBrowsing',
+            '--disable-background-networking', // ป้องกัน chrome เช็ค update หรือ safe browsing
             // --------------------------------------------------------
             '--no-first-run',
             '--no-default-browser-check',
-            '--lang=th-TH' // *** บังคับภาษาไทย ***
+            '--lang=th-TH' 
         ]
     });
 
     const page = await browser.newPage();
     
-    // ตั้งค่าภาษาเพิ่มเติม
+    // ตั้งค่าภาษา
     await page.setExtraHTTPHeaders({
         'Accept-Language': 'th-TH,th;q=0.9,en;q=0.8'
     });
     
-    // ตั้งค่า Download Path
+    // --- ตั้งค่า Download Behavior ผ่าน CDP (สำคัญมากสำหรับการโหลดไฟล์อันตราย) ---
     const client = await page.target().createCDPSession();
     await client.send('Page.setDownloadBehavior', {
         behavior: 'allow',
         downloadPath: downloadPath,
     });
+    // สั่งปิด Safe Browsing ผ่าน CDP อีกทาง (ถ้าทำได้)
+    try {
+        await client.send('Browser.setDownloadBehavior', {
+            behavior: 'allow',
+            downloadPath: downloadPath,
+            eventsEnabled: true 
+        }); 
+    } catch(e) { /* ignore if command not supported */ }
+
 
     page.setDefaultTimeout(60000);
 
@@ -253,7 +269,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
 
             console.log('   Attempting to trigger Report Center...');
             try {
-                // พยายามคลิกปุ่มศูนย์รายงาน
                 const jsResult = await page.evaluate(() => {
                     if (typeof showReportCenter === 'function') {
                         showReportCenter();
@@ -287,7 +302,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         } catch(e) {}
 
         try {
-            // ใช้ waitForSelector แบบ xpath แทน waitForXPath
             await reportPage.waitForSelector('xpath//*[@id="root"]', { timeout: 10000 });
         } catch (e) {
             console.log('Warning: Root element taking too long, continuing anyway...');
@@ -296,11 +310,21 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await reportPage.setViewport({ width: 1920, height: 1080 });
         console.log(`   Switched to Report Page: ${reportPage.url()}`);
 
+        // *** ตั้งค่า Download Path ให้หน้า Report Page ด้วย ***
         const clientReport = await reportPage.target().createCDPSession();
         await clientReport.send('Page.setDownloadBehavior', {
             behavior: 'allow',
             downloadPath: downloadPath,
         });
+        // ลองปิด Safe Browsing ผ่าน CDP สำหรับหน้าใหม่ด้วย (เพื่อความชัวร์)
+        try {
+            await clientReport.send('Browser.setDownloadBehavior', { 
+                behavior: 'allow', 
+                downloadPath: downloadPath, 
+                eventsEnabled: true 
+            });
+        } catch (e) {}
+
 
         // --- STEP 6: ตั้งค่ารายงาน (DMS) ---
         console.log('6. Configuring Report Filters...');
@@ -309,8 +333,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         console.log('   6.1 Selecting DMS Report...');
         
         let dmsClicked = false;
-        
-        // Priority 1: Use specific ID and XPath for the SVG Icon's parent button
         const dmsSelectors = [
             '//*[local-name()="svg" and @data-testid="FaceIcon"]/..', 
             '//*[@id="root"]/div/div[2]/div[1]/div/button[2]', 
@@ -321,7 +343,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             if (dmsClicked) break;
             try {
                 console.log(`      Trying selector: ${selector}`);
-                // แปลงเป็น xpath selector สำหรับ Puppeteer ใหม่
                 const xpSelector = `xpath/${selector}`;
                 await reportPage.waitForSelector(xpSelector, { visible: true, timeout: 5000 });
                 const elements = await reportPage.$$(xpSelector);
@@ -336,7 +357,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         }
 
         if (!dmsClicked) {
-            // Fallback: JS Click
              console.warn('   Click selectors failed. Trying JS click...');
              try {
                 const jsClicked = await reportPage.evaluate(() => {
@@ -374,7 +394,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await new Promise(r => setTimeout(r, 1000));
 
         const selectOption = async (optionText) => {
-            // ใช้ xpath selector แทน $x
             const selector = `xpath///div[contains(text(), '${optionText}')]`;
             const elements = await reportPage.$$(selector);
             if (elements.length > 0) {
@@ -382,10 +401,8 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                 console.log(`   Selected: ${optionText}`);
             } else {
                 console.warn(`   Option not found: ${optionText} (Page might be in English?)`);
-                
-                // Fallback for English text if needed
                 if (optionText === 'แจ้งเตือนการหาวนอน') {
-                     const engSelector = `xpath///div[contains(text(), 'Yawning')]`; // เดาภาษาอังกฤษ
+                     const engSelector = `xpath///div[contains(text(), 'Yawning')]`;
                      const engElements = await reportPage.$$(engSelector);
                      if(engElements.length > 0) { await engElements[0].click(); console.log('   Selected (EN): Yawning'); }
                 }
@@ -407,7 +424,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         const startInputXPath = '//div[contains(@class, "css-xn5mga")]//tr[3]//td[2]//input';
         await clickByXPath(reportPage, startInputXPath, 'Start Date Input');
         
-        // ใช้ CSS Selector สำหรับการพิมพ์ค่า (ง่ายกว่า)
         await reportPage.keyboard.down('Control');
         await reportPage.keyboard.press('A');
         await reportPage.keyboard.up('Control');
@@ -450,7 +466,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             console.log(`   Search Clicked Successfully (${searchSuccess})`);
         } else {
             console.warn('   JS Click Search failed. Trying XPath fallback...');
-            // ใช้ timeout 60 วิ
             const searchButtonXPath = '//*[@data-testid="SearchIcon"]/..';
             await clickByXPath(reportPage, searchButtonXPath, 'Search Button', 60000);
         }
@@ -459,30 +474,18 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         console.log('   Waiting 120 seconds for report generation...');
         await new Promise(r => setTimeout(r, 120000));
 
-        // 6.5 กดปุ่ม EXCEL (แก้ไข: ใช้ JS Click เป็นไม้ตาย + เพิ่ม Retry)
+        // 6.5 กดปุ่ม EXCEL
         console.log('   Clicking EXCEL...');
-        
         let excelClicked = false;
-        // ลองกด 3 ครั้ง (Retry Loop)
         for (let i = 1; i <= 3; i++) {
             if (excelClicked) break;
             console.log(`      Attempt ${i} to click EXCEL...`);
-            
-            // 1. ลองใช้ JS Click (แม่นยำที่สุด)
             const jsExcel = await reportPage.evaluate(() => {
-                // หาปุ่มที่มีคำว่า EXCEL
                 const buttons = Array.from(document.querySelectorAll('button'));
                 const excelBtn = buttons.find(b => b.textContent.includes('EXCEL'));
-                if (excelBtn) {
-                    excelBtn.click();
-                    return true;
-                }
-                // หาปุ่มสีเขียว (Success button)
+                if (excelBtn) { excelBtn.click(); return true; }
                 const successBtn = document.querySelector('button.MuiButton-containedSuccess');
-                if (successBtn) {
-                    successBtn.click();
-                    return true;
-                }
+                if (successBtn) { successBtn.click(); return true; }
                 return false;
             });
 
@@ -490,7 +493,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                 console.log('      EXCEL Clicked via JS!');
                 excelClicked = true;
             } else {
-                // 2. ถ้า JS ไม่เจอ ลองใช้ XPath (Wait 10s)
                 try {
                     await clickByXPath(reportPage, '//button[contains(text(), "EXCEL")] | //button[contains(@class, "MuiButton-containedSuccess")]', 'Excel Button', 10000);
                     excelClicked = true;
@@ -498,23 +500,19 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                     console.log(`      XPath click failed on attempt ${i}`);
                 }
             }
-            
-            if (!excelClicked) await new Promise(r => setTimeout(r, 5000)); // รอ 5 วิแล้วลองใหม่
+            if (!excelClicked) await new Promise(r => setTimeout(r, 5000));
         }
 
         if (!excelClicked) throw new Error('Failed to click EXCEL button after multiple attempts.');
         
-        // 6.6 รอ Popup และกด Save (แก้ไข: เพิ่มเวลารอ 20 วิ + Selector ใหม่)
+        // 6.6 รอ Popup และกด Save
         console.log('   Waiting 20 seconds for Save/Download Dialog...');
-        await new Promise(r => setTimeout(r, 20000)); // Hard wait 20s
+        await new Promise(r => setTimeout(r, 20000)); 
         
         console.log('   Clicking SAVE (Floppy Disk)...');
         let saveClicked = false;
         
-        // 1. ใช้ JS Force Click (จาก Selector ที่คุณให้มา)
         saveClicked = await reportPage.evaluate(() => {
-            // CSS Selector: #root > ... > button > svg
-            // ลองหาปุ่ม save ที่อยู่ใน dialog
             const saveBtn = document.querySelector("#root > div > div.MuiBox-root.css-jbmhbb > div.ant-card.ant-card-bordered.css-y8x9xp > div.ant-card-body > div > div > div > ul > li > div > div > div > div > button");
             if (saveBtn) {
                 saveBtn.click();
@@ -523,7 +521,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             return false;
         });
 
-        // 2. ถ้า JS ไม่เจอ ลองใช้ XPath (Wait 60s)
         if (!saveClicked) {
             console.log('   JS Save failed. Trying XPath...');
             const saveXPath = `
@@ -535,7 +532,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             console.log('   SAVE Clicked via JS!');
         }
 
-        // --- STEP 7: รอไฟล์ดาวน์โหลด ---
+        // --- STEP 7: รอไฟล์ดาวน์โหลด (เพิ่ม Loop เช็คให้ชัวร์) ---
         console.log('7. Waiting for file download...');
         const downloadedFile = await waitForFileToDownload(downloadPath, config.downloadTimeout);
         console.log(`   File downloaded: ${downloadedFile}`);
