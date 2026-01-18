@@ -11,7 +11,7 @@ const config = {
     emailFrom: process.env.EMAIL_FROM,
     emailPass: process.env.EMAIL_PASSWORD,
     emailTo: process.env.EMAIL_TO,
-    downloadTimeout: 120000 // เพิ่มเวลารอโหลดไฟล์เป็น 2 นาที
+    downloadTimeout: 300000 // เพิ่มเป็น 5 นาที (เผื่อเน็ตช้า)
 };
 
 const downloadPath = path.resolve(__dirname, 'downloads');
@@ -38,20 +38,22 @@ async function waitForFileToDownload(dir, timeout) {
                 const filePath = path.join(dir, file);
                 const size1 = fs.statSync(filePath).size;
                 setTimeout(() => {
-                    const size2 = fs.statSync(filePath).size;
-                    if (size1 === size2 && size1 > 0) {
-                        clearInterval(checker);
-                        clearTimeout(timer);
-                        resolve(filePath);
+                    if (fs.existsSync(filePath)) {
+                        const size2 = fs.statSync(filePath).size;
+                        if (size1 === size2 && size1 > 0) {
+                            clearInterval(checker);
+                            clearTimeout(timer);
+                            resolve(filePath);
+                        }
                     }
-                }, 2000); // รอเช็คขนาดอีก 2 วิ
+                }, 3000); // รอเช็คขนาดอีก 3 วิ
             }
 
             timePassed += checkInterval;
             if (timePassed >= timeout) {
                 clearInterval(checker);
                 clearTimeout(timer);
-                reject(new Error('Download timeout: No file found within time limit.'));
+                reject(new Error(`Download timeout (${timeout}ms): No file found.`));
             }
         }, checkInterval);
     });
@@ -124,15 +126,11 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             '--ignore-certificate-errors',
             '--unsafely-treat-insecure-origin-as-secure=http://cctvwli.com:3001',
             '--disable-web-security', 
-            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-features=IsolateOrigins,site-per-process,SafeBrowsing',
             '--disable-site-isolation-trials',
             '--disable-client-side-phishing-detection',
-            // --- เพิ่ม Arguments ปิด Safe Browsing แบบจัดเต็ม ---
             '--safebrowsing-disable-auto-update',
             '--safebrowsing-disable-download-protection',
-            '--disable-features=SafeBrowsing',
-            '--disable-background-networking', // ป้องกัน chrome เช็ค update หรือ safe browsing
-            // --------------------------------------------------------
             '--no-first-run',
             '--no-default-browser-check',
             '--lang=th-TH' 
@@ -146,21 +144,24 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         'Accept-Language': 'th-TH,th;q=0.9,en;q=0.8'
     });
     
-    // --- ตั้งค่า Download Behavior ผ่าน CDP (สำคัญมากสำหรับการโหลดไฟล์อันตราย) ---
-    const client = await page.target().createCDPSession();
-    await client.send('Page.setDownloadBehavior', {
-        behavior: 'allow',
-        downloadPath: downloadPath,
-    });
-    // สั่งปิด Safe Browsing ผ่าน CDP อีกทาง (ถ้าทำได้)
+    // --- ตั้งค่า Download Behavior แบบ Global ผ่าน CDP ---
+    // พยายามบังคับให้ทุกหน้ายอมรับการ Download
     try {
+        const client = await page.target().createCDPSession();
+        await client.send('Page.setDownloadBehavior', {
+            behavior: 'allow',
+            downloadPath: downloadPath,
+        });
         await client.send('Browser.setDownloadBehavior', {
             behavior: 'allow',
             downloadPath: downloadPath,
             eventsEnabled: true 
         }); 
-    } catch(e) { /* ignore if command not supported */ }
+    } catch(e) { console.log('CDP Setup Warning:', e.message); }
 
+    // ให้สิทธิ์ Automatic Downloads กับเว็บนี้โดยเฉพาะ
+    const context = browser.defaultBrowserContext();
+    await context.overridePermissions('http://cctvwli.com:3001', ['automatic-downloads']);
 
     page.setDefaultTimeout(60000);
 
@@ -173,12 +174,11 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             try {
                 console.log(`\n>>> Login Attempt ${attempt}/${maxRetries} <<<`);
                 
-                // 1. ไปหน้า Login
                 await page.goto('https://dvrai.net/808gps/login.html', { waitUntil: 'networkidle0' });
 
                 // 2. อ่าน CAPTCHA
                 await page.waitForSelector('#lwm'); 
-                await new Promise(r => setTimeout(r, 2000)); // รอภาพโหลด
+                await new Promise(r => setTimeout(r, 2000)); 
                 
                 const captchaElement = await page.$('#lwm');
                 if (!captchaElement) throw new Error('Captcha element #lwm not found');
@@ -195,7 +195,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
 
                 if (!captchaCode || captchaCode.length < 4) {
                     console.warn(`   !!! Invalid Captcha (Length < 4). Retrying...`);
-                    continue; // ข้ามไปรอบถัดไปทันที
+                    continue; 
                 }
 
                 // 3. กรอกข้อมูล
@@ -214,13 +214,13 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                 const currentUrl = page.url();
                 if (currentUrl.includes('login.html')) {
                     console.warn('   !!! Login Failed (Still on login page). Retrying...');
-                    continue; // ข้ามไปรอบถัดไป
+                    continue; 
                 } else {
                     console.log('   SUCCESS: Login Successful!');
                     isLoggedIn = true;
                     console.log('   Waiting 10 seconds for dashboard to fully load...');
                     await new Promise(r => setTimeout(r, 10000));
-                    break; // ออกจาก Loop
+                    break; 
                 }
             } catch (err) {
                 console.warn(`   Error during login attempt ${attempt}: ${err.message}`);
@@ -316,7 +316,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             behavior: 'allow',
             downloadPath: downloadPath,
         });
-        // ลองปิด Safe Browsing ผ่าน CDP สำหรับหน้าใหม่ด้วย (เพื่อความชัวร์)
         try {
             await clientReport.send('Browser.setDownloadBehavior', { 
                 behavior: 'allow', 
@@ -532,7 +531,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             console.log('   SAVE Clicked via JS!');
         }
 
-        // --- STEP 7: รอไฟล์ดาวน์โหลด (เพิ่ม Loop เช็คให้ชัวร์) ---
+        // --- STEP 7: รอไฟล์ดาวน์โหลด ---
         console.log('7. Waiting for file download...');
         const downloadedFile = await waitForFileToDownload(downloadPath, config.downloadTimeout);
         console.log(`   File downloaded: ${downloadedFile}`);
