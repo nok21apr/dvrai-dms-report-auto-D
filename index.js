@@ -5,7 +5,6 @@ const fs = require('fs');
 const path = require('path');
 
 // --- CONFIGURATION ---
-// ใช้ค่าว่าง '' เป็น Fallback เพื่อป้องกัน Error: text is not a string
 const config = {
     gpsUser: process.env.GPS_USER || '',
     gpsPass: process.env.GPS_PASSWORD || '',
@@ -22,37 +21,59 @@ if (!fs.existsSync(downloadPath)) {
     fs.mkdirSync(downloadPath);
 }
 
-// ฟังก์ชันรอจนกว่าไฟล์จะโหลดเสร็จ
+// ฟังก์ชันรอจนกว่าไฟล์จะโหลดเสร็จ (ปรับปรุงใหม่: เพิ่ม Debug Log)
 async function waitForFileToDownload(dir, timeout) {
     return new Promise((resolve, reject) => {
         let timer;
-        const checkInterval = 1000;
+        const checkInterval = 2000; // เช็คทุก 2 วินาที
         let timePassed = 0;
+
+        console.log(`   Waiting for file in: ${dir}`);
 
         const checker = setInterval(() => {
             const files = fs.readdirSync(dir);
-            const file = files.find(f => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && fs.statSync(path.join(dir, f)).isFile());
+            console.log(`      Files found: ${files.join(', ') || 'None'}`); // Debug: แสดงรายการไฟล์ที่เจอ
 
-            if (file) {
-                const filePath = path.join(dir, file);
-                const size1 = fs.statSync(filePath).size;
-                setTimeout(() => {
-                    if (fs.existsSync(filePath)) {
-                        const size2 = fs.statSync(filePath).size;
-                        if (size1 === size2 && size1 > 0) {
-                            clearInterval(checker);
-                            clearTimeout(timer);
-                            resolve(filePath);
-                        }
+            // หาไฟล์ล่าสุด (เรียงตามเวลาแก้ไขล่าสุด)
+            const latestFile = files
+                .map(file => ({ name: file, time: fs.statSync(path.join(dir, file)).mtime.getTime() }))
+                .sort((a, b) => b.time - a.time)[0];
+
+            if (latestFile) {
+                const filename = latestFile.name;
+                // ถ้าเป็นไฟล์ชั่วคราว ให้รอต่อ
+                if (filename.endsWith('.crdownload') || filename.endsWith('.tmp')) {
+                    console.log(`      Found temp file: ${filename}. Waiting for completion...`);
+                } else {
+                    // ถ้าเป็นไฟล์ปกติ เช็คขนาดไฟล์ว่านิ่งหรือยัง
+                    const filePath = path.join(dir, filename);
+                    const size1 = fs.statSync(filePath).size;
+                    
+                    if (size1 > 0) {
+                        console.log(`      Found potential file: ${filename} (${size1} bytes). Verifying stability...`);
+                        setTimeout(() => {
+                            if (fs.existsSync(filePath)) {
+                                const size2 = fs.statSync(filePath).size;
+                                if (size1 === size2) {
+                                    clearInterval(checker);
+                                    clearTimeout(timer);
+                                    console.log(`      File confirmed: ${filename}`);
+                                    resolve(filePath);
+                                } else {
+                                    console.log(`      File size changed (${size1} -> ${size2}). Still downloading...`);
+                                }
+                            }
+                        }, 3000); // รอ 3 วิแล้วเช็คซ้ำ
+                        return; // ออกจากรอบนี้ไปรอ timeout callback ข้างบน
                     }
-                }, 3000);
+                }
             }
 
             timePassed += checkInterval;
             if (timePassed >= timeout) {
                 clearInterval(checker);
                 clearTimeout(timer);
-                reject(new Error(`Download timeout (${timeout}ms): No file found.`));
+                reject(new Error(`Download timeout (${timeout}ms). Files in dir: ${files.join(', ')}`));
             }
         }, checkInterval);
     });
@@ -94,7 +115,7 @@ async function sendEmail(subject, message, attachmentPath = null) {
     }
 }
 
-// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath
+// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath (รับ timeout ได้ Default = 10วิ)
 async function clickByXPath(page, xpath, description = 'Element', timeout = 10000) {
     try {
         const selector = xpath.startsWith('xpath/') ? xpath : `xpath/${xpath}`;
