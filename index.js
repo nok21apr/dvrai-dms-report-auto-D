@@ -12,7 +12,6 @@ const config = {
     emailFrom: process.env.EMAIL_FROM || '',
     emailPass: process.env.EMAIL_PASSWORD || '',
     emailTo: process.env.EMAIL_TO || '',
-    // แก้ไข downloadTimeout เป็น 40 วินาที ตามคำขอ
     downloadTimeout: 40000 
 };
 
@@ -26,7 +25,7 @@ if (!fs.existsSync(downloadPath)) {
     fs.mkdirSync(downloadPath);
 }
 
-// ฟังก์ชันรอจนกว่าไฟล์จะโหลดเสร็จ (ปรับปรุงใหม่: เช็ค 2 โฟลเดอร์)
+// ฟังก์ชันรอจนกว่าไฟล์จะโหลดเสร็จ
 async function waitForFileToDownload(timeout) {
     return new Promise((resolve, reject) => {
         let timer;
@@ -38,7 +37,6 @@ async function waitForFileToDownload(timeout) {
         console.log(`      2. ${defaultDownloadPath}`);
 
         const checker = setInterval(() => {
-            // เช็คทั้ง 2 โฟลเดอร์
             const dirsToCheck = [downloadPath];
             if (fs.existsSync(defaultDownloadPath)) {
                 dirsToCheck.push(defaultDownloadPath);
@@ -51,16 +49,13 @@ async function waitForFileToDownload(timeout) {
                 try {
                     const files = fs.readdirSync(dir);
                     if (files.length > 0) {
-                        // หาไฟล์ล่าสุดที่ไม่ใช่ .crdownload, .tmp และไม่ใช่ไฟล์ระบบ (.)
                         const validFiles = files.filter(f => !f.startsWith('.') && !f.endsWith('.crdownload') && !f.endsWith('.tmp'));
                         
                         if (validFiles.length > 0) {
-                            // เรียงตามเวลาล่าสุด
                             const latest = validFiles
                                 .map(f => ({ name: f, path: path.join(dir, f), time: fs.statSync(path.join(dir, f)).mtime.getTime() }))
                                 .sort((a, b) => b.time - a.time)[0];
                             
-                            // ถ้าเจอไฟล์ที่เพิ่งสร้างในระยะเวลาที่รัน Script นี้
                             if (latest && (Date.now() - latest.time < timeout + 60000)) { 
                                 foundFile = latest;
                                 foundDir = dir;
@@ -174,14 +169,12 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             '--ignore-certificate-errors',
             '--unsafely-treat-insecure-origin-as-secure=http://cctvwli.com:3001',
             '--disable-web-security', 
-            // --- ปิด Safe Browsing และ Download Bubble (สำคัญมาก) ---
             '--disable-features=IsolateOrigins,site-per-process,SafeBrowsing,DownloadBubble,DownloadBubbleV2',
             '--disable-site-isolation-trials',
             '--disable-client-side-phishing-detection',
             '--safebrowsing-disable-auto-update',
             '--safebrowsing-disable-download-protection',
             '--safebrowsing-disable-extension-blacklist',
-            // -----------------------------------------------------
             '--no-first-run',
             '--no-default-browser-check',
             '--lang=th-TH' 
@@ -194,17 +187,12 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         'Accept-Language': 'th-TH,th;q=0.9,en;q=0.8'
     });
     
-    // --- ตั้งค่า Download Behavior ผ่าน CDP (ใส่ทั้ง Page และ Browser Level) ---
     try {
         const client = await page.target().createCDPSession();
-        
-        // 1. Page Level
         await client.send('Page.setDownloadBehavior', {
             behavior: 'allow',
             downloadPath: downloadPath,
         });
-        
-        // 2. Browser Level (Experimental but effective)
         await client.send('Browser.setDownloadBehavior', {
             behavior: 'allow',
             downloadPath: downloadPath,
@@ -212,7 +200,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         }); 
     } catch(e) { console.log('CDP Setup Warning:', e.message); }
 
-    // Override Permissions
     try {
         const context = browser.defaultBrowserContext();
         await context.overridePermissions('http://cctvwli.com:3001', ['automatic-downloads']);
@@ -290,7 +277,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                 reportPage = currentPages[currentPages.length - 1]; 
                 console.log(`   >>> New tab detected! URL: ${reportPage.url()}`);
                 
-                // Handle Warning Page
                 const pageTitle = await reportPage.title();
                 if (pageTitle.includes('Privacy') || pageTitle.includes('Security')) {
                     try {
@@ -310,7 +296,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
                 const jsResult = await page.evaluate(() => {
                     if (typeof showReportCenter === 'function') {
                         showReportCenter();
-                        return 'Executed showReportCenter()';
+                        return 'Executed showReportCenter() directly';
                     } else {
                         const btn = document.querySelector('div[onclick*="showReportCenter"]') || 
                                     document.querySelector('#main-topPanel > div.header-nav > div:nth-child(7)');
@@ -334,10 +320,8 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         
         await reportPage.setViewport({ width: 1920, height: 1080 });
 
-        // *** ตั้งค่า Download Path ให้หน้า Report Page (ใส่ทั้ง Page และ Browser Level) ***
         try {
             const clientReport = await reportPage.target().createCDPSession();
-            // เพิ่ม Page.setDownloadBehavior สำหรับหน้าใหม่ด้วย
             await clientReport.send('Page.setDownloadBehavior', {
                 behavior: 'allow',
                 downloadPath: downloadPath,
@@ -352,42 +336,68 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         // --- STEP 6: Report Filters ---
         console.log('6. Configuring Report Filters...');
         
+        // --- 6.1 Selecting DMS Report (แก้ไข: บังคับกดปุ่ม "รายงาน DMS" ให้เจอแน่นอน) ---
+        console.log('   6.1 Selecting DMS Report...');
+        
         let dmsClicked = false;
-        const dmsSelectors = [
-            '//*[local-name()="svg" and @data-testid="FaceIcon"]/..', 
-            '//*[@id="root"]/div/div[2]/div[1]/div/button[2]', 
-            '//button[contains(., "รายงาน DMS")]'
-        ];
-
-        for (const selector of dmsSelectors) {
-            if (dmsClicked) break;
-            try {
-                const xpSelector = `xpath/${selector}`;
-                await reportPage.waitForSelector(xpSelector, { visible: true, timeout: 5000 });
-                const elements = await reportPage.$$(xpSelector);
-                if (elements.length > 0) {
-                    await elements[0].click();
-                    dmsClicked = true;
+        
+        // ใช้ JS วนหาปุ่มที่มีคำว่า "รายงาน DMS" ชัดๆ
+        try {
+            dmsClicked = await reportPage.evaluate(() => {
+                // 1. หาจาก Button ทั้งหมด
+                const buttons = Array.from(document.querySelectorAll('button'));
+                for (const btn of buttons) {
+                    if (btn.innerText.includes('รายงาน DMS') || btn.textContent.includes('รายงาน DMS')) {
+                        btn.click();
+                        return true;
+                    }
                 }
-            } catch (e) {}
-        }
+                // 2. หาจาก SVG FaceIcon
+                const svg = document.querySelector('svg[data-testid="FaceIcon"]');
+                if (svg) {
+                    const btn = svg.closest('button');
+                    if (btn) {
+                        btn.click();
+                        return true;
+                    }
+                }
+                return false;
+            });
+        } catch(e) { console.error("   JS Click DMS error:", e.message); }
 
-        if (!dmsClicked) {
-             try {
-                const jsClicked = await reportPage.evaluate(() => {
-                    const buttons = Array.from(document.querySelectorAll('button'));
-                    const dmsBtn = buttons.find(b => b.textContent.includes('รายงาน DMS'));
-                    if (dmsBtn) { dmsBtn.click(); return true; }
-                    return false;
-                });
-                if (jsClicked) dmsClicked = true;
-             } catch (e) {}
+        if (dmsClicked) {
+            console.log('      Clicked DMS Report button via JS Text Search!');
+        } else {
+            console.log('      JS Text Search failed. Trying XPath...');
+            // Fallback XPath
+            const dmsSelectors = [
+                '//button[contains(., "รายงาน DMS")]',
+                '//*[local-name()="svg" and @data-testid="FaceIcon"]/..', 
+                '//*[@id="root"]/div/div[2]/div[1]/div/button[2]'
+            ];
+            for (const selector of dmsSelectors) {
+                if (dmsClicked) break;
+                try {
+                    const xpSelector = `xpath/${selector}`;
+                    await reportPage.waitForSelector(xpSelector, { visible: true, timeout: 5000 });
+                    const elements = await reportPage.$$(xpSelector);
+                    if (elements.length > 0) {
+                        await elements[0].click();
+                        console.log(`      Clicked via XPath: ${selector}`);
+                        dmsClicked = true;
+                    }
+                } catch (e) {}
+            }
         }
         
-        if (!dmsClicked) throw new Error('Could not select DMS Report button.');
+        if (!dmsClicked) throw new Error('Could not select "รายงาน DMS" button. Please check if the text matches.');
 
+        // รอ UI เปลี่ยน (สำคัญมาก)
+        console.log('   Waiting for DMS UI to load...');
+        await new Promise(r => setTimeout(r, 3000));
+
+        // 6.2 เคลียร์รายการและเลือก Dropdown
         console.log('   Selecting Alerts...');
-        await new Promise(r => setTimeout(r, 2000)); 
         await clickByXPath(reportPage, '//div[contains(@class, "css-xn5mga")]//tr[2]//td[2]//div/div', 'Alert Type Dropdown');
         
         await new Promise(r => setTimeout(r, 1000));
@@ -395,7 +405,12 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         const selectOption = async (optionText) => {
             const selector = `xpath///div[contains(text(), '${optionText}')]`;
             const elements = await reportPage.$$(selector);
-            if (elements.length > 0) await elements[0].click();
+            if (elements.length > 0) {
+                await elements[0].click();
+                console.log(`   Selected: ${optionText}`);
+            } else {
+                console.warn(`   Option not found: ${optionText}`);
+            }
         };
 
         await selectOption('แจ้งเตือนการหาวนอน');
@@ -417,7 +432,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await reportPage.keyboard.down('Control'); await reportPage.keyboard.press('A'); await reportPage.keyboard.up('Control');
         await reportPage.keyboard.press('Backspace'); await reportPage.keyboard.type(endDateTime); await reportPage.keyboard.press('Enter');
 
-        // Search
+        // 6.4 กดปุ่ม Search (JS Click)
         console.log('   Clicking Search...');
         await new Promise(r => setTimeout(r, 2000));
         
@@ -426,6 +441,10 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             if (icon && icon.closest('button')) { icon.closest('button').click(); return true; }
             const cssBtn = document.querySelector('.css-1hw9j7s');
             if (cssBtn) { cssBtn.click(); return true; }
+            // หาปุ่มที่มีคำว่า Search หรือ ค้นหา
+            const allBtns = Array.from(document.querySelectorAll('button'));
+            const searchBtn = allBtns.find(b => b.innerText.includes('Search') || b.innerText.includes('ค้นหา'));
+            if(searchBtn) { searchBtn.click(); return true; }
             return false;
         });
 
@@ -433,11 +452,23 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             await clickByXPath(reportPage, '//*[@data-testid="SearchIcon"]/..', 'Search Button', 60000);
         }
         
-        console.log('   Waiting 120s for report...');
+        console.log('   Waiting 120s for report generation...');
         await new Promise(r => setTimeout(r, 120000));
 
-        // EXCEL
+        // 6.5 กดปุ่ม EXCEL (เช็คปุ่ม Disable)
         console.log('   Clicking EXCEL...');
+        
+        // เช็คก่อนว่าปุ่ม Excel เป็นสีเทา (Disabled) หรือไม่
+        const isExcelDisabled = await reportPage.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const excelBtn = buttons.find(b => b.textContent.includes('EXCEL'));
+            return excelBtn ? excelBtn.disabled : true;
+        });
+
+        if (isExcelDisabled) {
+            throw new Error("EXCEL button is DISABLED (Grey). Report data might be empty or 'DMS Report' was not selected correctly.");
+        }
+
         let excelClicked = false;
         for (let i = 1; i <= 3; i++) {
             if (excelClicked) break;
@@ -463,14 +494,17 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         if (!excelClicked) throw new Error('Failed to click EXCEL button.');
         
         // SAVE
-        console.log('   Waiting 60s for Save Dialog...');
-        await new Promise(r => setTimeout(r, 60000)); 
+        console.log('   Waiting 20s for Save Dialog...');
+        await new Promise(r => setTimeout(r, 20000)); 
         
         console.log('   Clicking SAVE (Floppy Disk)...');
         let saveClicked = false;
         saveClicked = await reportPage.evaluate(() => {
             const saveBtn = document.querySelector("#root > div > div.MuiBox-root.css-jbmhbb > div.ant-card.ant-card-bordered.css-y8x9xp > div.ant-card-body > div > div > div > ul > li > div > div > div > div > button");
             if (saveBtn) { saveBtn.click(); return true; }
+            // ลองหาปุ่มที่มี Icon Save
+            const saveIcon = document.querySelector('[data-testid="SaveOutlinedIcon"]');
+            if (saveIcon && saveIcon.closest('button')) { saveIcon.closest('button').click(); return true; }
             return false;
         });
 
@@ -479,33 +513,24 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             await clickByXPath(reportPage, saveXPath, 'Save Icon', 60000);
         }
 
-        // --- STEP 7: Wait for Download (เช็คทั้ง 2 โฟลเดอร์) ---
+        // --- STEP 7: Wait for Download ---
         console.log('7. Waiting for file download...');
-        // ส่งแค่ timeout (path ถูก hardcode ใน function เพื่อความชัวร์)
-        // **ใช้เวลาที่ตั้งไว้ใหม่ (40s) หรือตาม config**
         let downloadedFile = await waitForFileToDownload(config.downloadTimeout);
         console.log(`   File downloaded: ${downloadedFile}`);
 
-        // --- FIX: Rename file to .xls if missing extension ---
+        // --- FIX: Rename file ---
         const ext = path.extname(downloadedFile);
         if (!ext || (ext !== '.xls' && ext !== '.xlsx')) {
-            console.log(`   File extension is '${ext}'. Renaming to .xls for compatibility...`);
+            console.log(`   Renaming file to .xls...`);
             const dir = path.dirname(downloadedFile);
             const newName = `GPS_Report_${today}.xls`;
             const newFilePath = path.join(dir, newName);
-            
-            // ลบไฟล์เก่าทิ้งถ้ามี
-            if (fs.existsSync(newFilePath)) {
-                try { fs.unlinkSync(newFilePath); } catch(e) {}
-            }
-
+            if (fs.existsSync(newFilePath)) try { fs.unlinkSync(newFilePath); } catch(e) {}
             try {
                 fs.renameSync(downloadedFile, newFilePath);
                 downloadedFile = newFilePath;
                 console.log(`   Renamed file to: ${downloadedFile}`);
-            } catch (e) {
-                console.error(`   Rename failed: ${e.message}. Sending original file.`);
-            }
+            } catch (e) {}
         }
 
         // --- STEP 8: Email ---
@@ -535,4 +560,3 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await browser.close();
     }
 })();
-
