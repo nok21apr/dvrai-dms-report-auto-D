@@ -401,52 +401,12 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await reportPage.keyboard.down('Control'); await reportPage.keyboard.press('A'); await reportPage.keyboard.up('Control');
         await reportPage.keyboard.press('Backspace'); await reportPage.keyboard.type(endDateTime); await reportPage.keyboard.press('Enter');
 
-        // 6.4 กดปุ่ม Search (แก้ไข: ใช้ Loop Retry + Puppeteer Click)
-        console.log('   Clicking Search...');
-        let searchClicked = false;
-        
-        // ลองกด 3 รอบ
-        for (let i = 1; i <= 3; i++) {
-            if (searchClicked) break;
-            console.log(`      Attempt ${i} to click Search...`);
-            
-            try {
-                // Method 1: ใช้ Puppeteer Click บน XPath ที่แม่นยำ (Priority)
-                // XPath จากที่คุณให้มา: //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1]
-                // และ XPath สำรอง: //*[@data-testid="SearchIcon"]/..
-                const searchSelector = `
-                    //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1] |
-                    //*[@data-testid="SearchIcon"]/ancestor::button
-                `;
-                
-                await clickByXPath(reportPage, searchSelector, 'Search Button', 5000); // รอ 5 วิ
-                console.log('      Search clicked via Puppeteer!');
-                searchClicked = true;
-            } catch (e) {
-                console.log(`      Puppeteer click failed. Trying JS...`);
-                // Method 2: JS Force Click
-                const jsSuccess = await reportPage.evaluate(() => {
-                    const icon = document.querySelector('[data-testid="SearchIcon"]');
-                    if (icon) {
-                        const btn = icon.closest('button');
-                        if (btn) { btn.click(); return true; }
-                    }
-                    // ลองหาปุ่มที่มี class css ที่คุณเคยให้มา
-                    const cssBtn = document.querySelector('.css-1hw9j7s');
-                    if (cssBtn) { cssBtn.click(); return true; }
-                    return false;
-                });
-                
-                if (jsSuccess) {
-                    console.log('      Search clicked via JS!');
-                    searchClicked = true;
-                }
-            }
-            // ถ้ายังไม่สำเร็จ ให้รอสักพักแล้วลองใหม่
-            if (!searchClicked) await new Promise(r => setTimeout(r, 2000));
-        }
-
-        if (!searchClicked) throw new Error("Failed to click Search button.");
+        // --- เพิ่มการกด Tab และ Enter เพื่อ Search ---
+        console.log('   Pressing Tab + Enter to Search...');
+        await new Promise(r => setTimeout(r, 500)); // รอสักนิดหลังกรอกวันที่
+        await reportPage.keyboard.press('Tab'); // กด Tab 1 ครั้ง
+        await new Promise(r => setTimeout(r, 300));
+        await reportPage.keyboard.press('Enter'); // กด Enter เพื่อ Search
         
         console.log('   Waiting 120s for report generation...');
         await new Promise(r => setTimeout(r, 120000));
