@@ -427,14 +427,13 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         
         // Selector ที่คุณให้มา:
         // XPath: //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1]
-        // Full XPath: /html/body/div[1]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1]
         
         const searchButtonXPath = `
             //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1] |
             //*[@data-testid="SearchIcon"]
         `;
         
-        // เพิ่ม Timeout เป็น 60 วินาที สำหรับการหากดปุ่ม Search (ตามที่คุณแนะนำ)
+        // เพิ่ม Timeout เป็น 60 วินาที สำหรับการหากดปุ่ม Search
         await clickByXPath(reportPage, searchButtonXPath, 'Search Button', 60000);
         
         // --- รอรายงานโหลด 120 วินาที (Hard Wait) ตามที่คุณแนะนำ ---
