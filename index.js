@@ -499,12 +499,36 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
 
         if (!excelClicked) throw new Error('Failed to click EXCEL button after multiple attempts.');
         
-        // 6.6 รอ Popup และกด Save
-        console.log('   Waiting for Save/Download Dialog...');
-        // ใช้ waitForSelector xpath
-        await reportPage.waitForSelector('xpath//*[@data-testid="SaveOutlinedIcon"]', { visible: true, timeout: 60000 });
-        await new Promise(r => setTimeout(r, 1000));
-        await clickByXPath(reportPage, '//*[@data-testid="SaveOutlinedIcon"]', 'Save Icon (Download)');
+        // 6.6 รอ Popup และกด Save (แก้ไข: เพิ่มเวลารอ 20 วิ + Selector ใหม่)
+        console.log('   Waiting 20 seconds for Save/Download Dialog...');
+        await new Promise(r => setTimeout(r, 20000)); // Hard wait 20s
+        
+        console.log('   Clicking SAVE (Floppy Disk)...');
+        let saveClicked = false;
+        
+        // 1. ใช้ JS Force Click (จาก Selector ที่คุณให้มา)
+        saveClicked = await reportPage.evaluate(() => {
+            // CSS Selector: #root > ... > button > svg
+            // ลองหาปุ่ม save ที่อยู่ใน dialog
+            const saveBtn = document.querySelector("#root > div > div.MuiBox-root.css-jbmhbb > div.ant-card.ant-card-bordered.css-y8x9xp > div.ant-card-body > div > div > div > ul > li > div > div > div > div > button");
+            if (saveBtn) {
+                saveBtn.click();
+                return true;
+            }
+            return false;
+        });
+
+        // 2. ถ้า JS ไม่เจอ ลองใช้ XPath (Wait 60s)
+        if (!saveClicked) {
+            console.log('   JS Save failed. Trying XPath...');
+            const saveXPath = `
+                //*[@id="root"]/div/div[1]/div[2]/div[2]/div/div/div/ul/li/div/div/div/div/button/svg |
+                //*[@data-testid="SaveOutlinedIcon"]
+            `;
+            await clickByXPath(reportPage, saveXPath, 'Save Icon (Download)', 60000);
+        } else {
+            console.log('   SAVE Clicked via JS!');
+        }
 
         // --- STEP 7: รอไฟล์ดาวน์โหลด ---
         console.log('7. Waiting for file download...');
