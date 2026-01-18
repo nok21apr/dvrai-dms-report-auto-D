@@ -463,8 +463,8 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         if (!excelClicked) throw new Error('Failed to click EXCEL button.');
         
         // SAVE
-        console.log('   Waiting 20s for Save Dialog...');
-        await new Promise(r => setTimeout(r, 20000)); 
+        console.log('   Waiting 60s for Save Dialog...');
+        await new Promise(r => setTimeout(r, 60000)); 
         
         console.log('   Clicking SAVE (Floppy Disk)...');
         let saveClicked = false;
@@ -535,3 +535,4 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await browser.close();
     }
 })();
+
