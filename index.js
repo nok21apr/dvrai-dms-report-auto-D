@@ -336,68 +336,42 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         // --- STEP 6: Report Filters ---
         console.log('6. Configuring Report Filters...');
         
-        // --- 6.1 Selecting DMS Report (แก้ไข: บังคับกดปุ่ม "รายงาน DMS" ให้เจอแน่นอน) ---
-        console.log('   6.1 Selecting DMS Report...');
-        
         let dmsClicked = false;
-        
-        // ใช้ JS วนหาปุ่มที่มีคำว่า "รายงาน DMS" ชัดๆ
-        try {
-            dmsClicked = await reportPage.evaluate(() => {
-                // 1. หาจาก Button ทั้งหมด
-                const buttons = Array.from(document.querySelectorAll('button'));
-                for (const btn of buttons) {
-                    if (btn.innerText.includes('รายงาน DMS') || btn.textContent.includes('รายงาน DMS')) {
-                        btn.click();
-                        return true;
-                    }
-                }
-                // 2. หาจาก SVG FaceIcon
-                const svg = document.querySelector('svg[data-testid="FaceIcon"]');
-                if (svg) {
-                    const btn = svg.closest('button');
-                    if (btn) {
-                        btn.click();
-                        return true;
-                    }
-                }
-                return false;
-            });
-        } catch(e) { console.error("   JS Click DMS error:", e.message); }
+        const dmsSelectors = [
+            '//*[local-name()="svg" and @data-testid="FaceIcon"]/..', 
+            '//*[@id="root"]/div/div[2]/div[1]/div/button[2]', 
+            '//button[contains(., "รายงาน DMS")]'
+        ];
 
-        if (dmsClicked) {
-            console.log('      Clicked DMS Report button via JS Text Search!');
-        } else {
-            console.log('      JS Text Search failed. Trying XPath...');
-            // Fallback XPath
-            const dmsSelectors = [
-                '//button[contains(., "รายงาน DMS")]',
-                '//*[local-name()="svg" and @data-testid="FaceIcon"]/..', 
-                '//*[@id="root"]/div/div[2]/div[1]/div/button[2]'
-            ];
-            for (const selector of dmsSelectors) {
-                if (dmsClicked) break;
-                try {
-                    const xpSelector = `xpath/${selector}`;
-                    await reportPage.waitForSelector(xpSelector, { visible: true, timeout: 5000 });
-                    const elements = await reportPage.$$(xpSelector);
-                    if (elements.length > 0) {
-                        await elements[0].click();
-                        console.log(`      Clicked via XPath: ${selector}`);
-                        dmsClicked = true;
-                    }
-                } catch (e) {}
-            }
+        for (const selector of dmsSelectors) {
+            if (dmsClicked) break;
+            try {
+                const xpSelector = `xpath/${selector}`;
+                await reportPage.waitForSelector(xpSelector, { visible: true, timeout: 5000 });
+                const elements = await reportPage.$$(xpSelector);
+                if (elements.length > 0) {
+                    await elements[0].click();
+                    dmsClicked = true;
+                }
+            } catch (e) {}
+        }
+
+        if (!dmsClicked) {
+             try {
+                const jsClicked = await reportPage.evaluate(() => {
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const dmsBtn = buttons.find(b => b.textContent.includes('รายงาน DMS'));
+                    if (dmsBtn) { dmsBtn.click(); return true; }
+                    return false;
+                });
+                if (jsClicked) dmsClicked = true;
+             } catch (e) {}
         }
         
-        if (!dmsClicked) throw new Error('Could not select "รายงาน DMS" button. Please check if the text matches.');
+        if (!dmsClicked) throw new Error('Could not select DMS Report button.');
 
-        // รอ UI เปลี่ยน (สำคัญมาก)
-        console.log('   Waiting for DMS UI to load...');
-        await new Promise(r => setTimeout(r, 3000));
-
-        // 6.2 เคลียร์รายการและเลือก Dropdown
         console.log('   Selecting Alerts...');
+        await new Promise(r => setTimeout(r, 2000)); 
         await clickByXPath(reportPage, '//div[contains(@class, "css-xn5mga")]//tr[2]//td[2]//div/div', 'Alert Type Dropdown');
         
         await new Promise(r => setTimeout(r, 1000));
@@ -405,12 +379,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         const selectOption = async (optionText) => {
             const selector = `xpath///div[contains(text(), '${optionText}')]`;
             const elements = await reportPage.$$(selector);
-            if (elements.length > 0) {
-                await elements[0].click();
-                console.log(`   Selected: ${optionText}`);
-            } else {
-                console.warn(`   Option not found: ${optionText}`);
-            }
+            if (elements.length > 0) await elements[0].click();
         };
 
         await selectOption('แจ้งเตือนการหาวนอน');
@@ -432,30 +401,57 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await reportPage.keyboard.down('Control'); await reportPage.keyboard.press('A'); await reportPage.keyboard.up('Control');
         await reportPage.keyboard.press('Backspace'); await reportPage.keyboard.type(endDateTime); await reportPage.keyboard.press('Enter');
 
-        // 6.4 กดปุ่ม Search (JS Click)
+        // 6.4 กดปุ่ม Search (แก้ไข: ใช้ Loop Retry + Puppeteer Click)
         console.log('   Clicking Search...');
-        await new Promise(r => setTimeout(r, 2000));
+        let searchClicked = false;
         
-        const searchSuccess = await reportPage.evaluate(() => {
-            const icon = document.querySelector('[data-testid="SearchIcon"]');
-            if (icon && icon.closest('button')) { icon.closest('button').click(); return true; }
-            const cssBtn = document.querySelector('.css-1hw9j7s');
-            if (cssBtn) { cssBtn.click(); return true; }
-            // หาปุ่มที่มีคำว่า Search หรือ ค้นหา
-            const allBtns = Array.from(document.querySelectorAll('button'));
-            const searchBtn = allBtns.find(b => b.innerText.includes('Search') || b.innerText.includes('ค้นหา'));
-            if(searchBtn) { searchBtn.click(); return true; }
-            return false;
-        });
-
-        if (!searchSuccess) {
-            await clickByXPath(reportPage, '//*[@data-testid="SearchIcon"]/..', 'Search Button', 60000);
+        // ลองกด 3 รอบ
+        for (let i = 1; i <= 3; i++) {
+            if (searchClicked) break;
+            console.log(`      Attempt ${i} to click Search...`);
+            
+            try {
+                // Method 1: ใช้ Puppeteer Click บน XPath ที่แม่นยำ (Priority)
+                // XPath จากที่คุณให้มา: //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1]
+                // และ XPath สำรอง: //*[@data-testid="SearchIcon"]/..
+                const searchSelector = `
+                    //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1] |
+                    //*[@data-testid="SearchIcon"]/ancestor::button
+                `;
+                
+                await clickByXPath(reportPage, searchSelector, 'Search Button', 5000); // รอ 5 วิ
+                console.log('      Search clicked via Puppeteer!');
+                searchClicked = true;
+            } catch (e) {
+                console.log(`      Puppeteer click failed. Trying JS...`);
+                // Method 2: JS Force Click
+                const jsSuccess = await reportPage.evaluate(() => {
+                    const icon = document.querySelector('[data-testid="SearchIcon"]');
+                    if (icon) {
+                        const btn = icon.closest('button');
+                        if (btn) { btn.click(); return true; }
+                    }
+                    // ลองหาปุ่มที่มี class css ที่คุณเคยให้มา
+                    const cssBtn = document.querySelector('.css-1hw9j7s');
+                    if (cssBtn) { cssBtn.click(); return true; }
+                    return false;
+                });
+                
+                if (jsSuccess) {
+                    console.log('      Search clicked via JS!');
+                    searchClicked = true;
+                }
+            }
+            // ถ้ายังไม่สำเร็จ ให้รอสักพักแล้วลองใหม่
+            if (!searchClicked) await new Promise(r => setTimeout(r, 2000));
         }
+
+        if (!searchClicked) throw new Error("Failed to click Search button.");
         
         console.log('   Waiting 120s for report generation...');
         await new Promise(r => setTimeout(r, 120000));
 
-        // 6.5 กดปุ่ม EXCEL (เช็คปุ่ม Disable)
+        // 6.5 กดปุ่ม EXCEL
         console.log('   Clicking EXCEL...');
         
         // เช็คก่อนว่าปุ่ม Excel เป็นสีเทา (Disabled) หรือไม่
@@ -466,7 +462,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         });
 
         if (isExcelDisabled) {
-            throw new Error("EXCEL button is DISABLED (Grey). Report data might be empty or 'DMS Report' was not selected correctly.");
+            throw new Error("EXCEL button is DISABLED (Grey). Report data might be empty or Search failed.");
         }
 
         let excelClicked = false;
@@ -502,7 +498,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         saveClicked = await reportPage.evaluate(() => {
             const saveBtn = document.querySelector("#root > div > div.MuiBox-root.css-jbmhbb > div.ant-card.ant-card-bordered.css-y8x9xp > div.ant-card-body > div > div > div > ul > li > div > div > div > div > button");
             if (saveBtn) { saveBtn.click(); return true; }
-            // ลองหาปุ่มที่มี Icon Save
             const saveIcon = document.querySelector('[data-testid="SaveOutlinedIcon"]');
             if (saveIcon && saveIcon.closest('button')) { saveIcon.closest('button').click(); return true; }
             return false;
