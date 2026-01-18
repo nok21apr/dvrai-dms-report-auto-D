@@ -12,8 +12,8 @@ const config = {
     emailFrom: process.env.EMAIL_FROM || '',
     emailPass: process.env.EMAIL_PASSWORD || '',
     emailTo: process.env.EMAIL_TO || '',
-    // ลดเวลา downloadTimeout เหลือ 20 วินาที (ตามคำขอ) + เผื่อ buffer นิดหน่อยเป็น 30วิ
-    downloadTimeout: 30000 
+    // แก้ไข downloadTimeout เป็น 40 วินาที ตามคำขอ
+    downloadTimeout: 40000 
 };
 
 // กำหนด Path หลักที่เราต้องการ (ใน Project folder)
@@ -174,12 +174,14 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             '--ignore-certificate-errors',
             '--unsafely-treat-insecure-origin-as-secure=http://cctvwli.com:3001',
             '--disable-web-security', 
+            // --- ปิด Safe Browsing และ Download Bubble (สำคัญมาก) ---
             '--disable-features=IsolateOrigins,site-per-process,SafeBrowsing,DownloadBubble,DownloadBubbleV2',
             '--disable-site-isolation-trials',
             '--disable-client-side-phishing-detection',
             '--safebrowsing-disable-auto-update',
             '--safebrowsing-disable-download-protection',
             '--safebrowsing-disable-extension-blacklist',
+            // -----------------------------------------------------
             '--no-first-run',
             '--no-default-browser-check',
             '--lang=th-TH' 
@@ -480,7 +482,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         // --- STEP 7: Wait for Download (เช็คทั้ง 2 โฟลเดอร์) ---
         console.log('7. Waiting for file download...');
         // ส่งแค่ timeout (path ถูก hardcode ใน function เพื่อความชัวร์)
-        // **ใช้เวลาที่ตั้งไว้ใหม่ (20s) หรือตาม config**
+        // **ใช้เวลาที่ตั้งไว้ใหม่ (40s) หรือตาม config**
         let downloadedFile = await waitForFileToDownload(config.downloadTimeout);
         console.log(`   File downloaded: ${downloadedFile}`);
 
