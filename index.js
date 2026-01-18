@@ -84,13 +84,14 @@ async function sendEmail(subject, message, attachmentPath = null) {
     }
 }
 
-// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath (ปรับปรุงใหม่สำหรับ Puppeteer v23+)
-async function clickByXPath(page, xpath, description = 'Element') {
+// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath (รับ timeout ได้ Default = 10วิ)
+async function clickByXPath(page, xpath, description = 'Element', timeout = 10000) {
     try {
-        // แปลง XPath ให้เป็น Selector แบบใหม่ (เติม 'xpath/' นำหน้า)
+        // แปลง XPath ให้เป็น Selector แบบใหม่
         const selector = xpath.startsWith('xpath/') ? xpath : `xpath/${xpath}`;
         
-        await page.waitForSelector(selector, { timeout: 10000, visible: true });
+        // ใช้ timeout ที่ส่งเข้ามา
+        await page.waitForSelector(selector, { timeout: timeout, visible: true });
         const elements = await page.$$(selector);
         if (elements.length > 0) {
             await elements[0].click();
@@ -402,7 +403,6 @@ async function clickByXPath(page, xpath, description = 'Element') {
         await clickByXPath(reportPage, startInputXPath, 'Start Date Input');
         
         // ใช้ CSS Selector สำหรับการพิมพ์ค่า (ง่ายกว่า)
-        // ต้องหา CSS Selector ที่แม่นยำ หรือใช้ clickByXPath เพื่อ focus แล้วพิมพ์
         await reportPage.keyboard.down('Control');
         await reportPage.keyboard.press('A');
         await reportPage.keyboard.up('Control');
@@ -420,20 +420,36 @@ async function clickByXPath(page, xpath, description = 'Element') {
         await reportPage.keyboard.type(endDateTime);
         await reportPage.keyboard.press('Enter');
 
-        // 6.4 กดปุ่ม Search
+        // 6.4 กดปุ่ม Search (แก้ไข: ใช้ Selector ใหม่ + เพิ่ม Timeout 60 วินาที)
         console.log('   Clicking Search...');
-        await clickByXPath(reportPage, '//*[@data-testid="SearchIcon"]', 'Search Button');
+        // รอสักพักให้ UI นิ่งก่อนกด
+        await new Promise(r => setTimeout(r, 2000));
         
-        await new Promise(r => setTimeout(r, 5000));
+        // Selector ที่คุณให้มา:
+        // XPath: //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1]
+        // Full XPath: /html/body/div[1]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1]
+        
+        const searchButtonXPath = `
+            //*[@id="root"]/div/div[2]/div[3]/div/div[2]/table/tbody/tr[4]/td[2]/div/button[1] |
+            //*[@data-testid="SearchIcon"]
+        `;
+        
+        // เพิ่ม Timeout เป็น 60 วินาที สำหรับการหากดปุ่ม Search (ตามที่คุณแนะนำ)
+        await clickByXPath(reportPage, searchButtonXPath, 'Search Button', 60000);
+        
+        // --- รอรายงานโหลด 120 วินาที (Hard Wait) ตามที่คุณแนะนำ ---
+        console.log('   Waiting 120 seconds for report generation...');
+        await new Promise(r => setTimeout(r, 120000));
 
         // 6.5 กดปุ่ม EXCEL
         console.log('   Clicking EXCEL...');
-        await clickByXPath(reportPage, '//button[contains(text(), "EXCEL")] | //button[contains(@class, "MuiButton-containedSuccess")]', 'Excel Button');
+        // เพิ่ม timeout ให้ปุ่ม Excel เผื่อไว้ด้วย
+        await clickByXPath(reportPage, '//button[contains(text(), "EXCEL")] | //button[contains(@class, "MuiButton-containedSuccess")]', 'Excel Button', 60000);
         
         // 6.6 รอ Popup และกด Save
         console.log('   Waiting for Save/Download Dialog...');
         // ใช้ waitForSelector xpath
-        await reportPage.waitForSelector('xpath//*[@data-testid="SaveOutlinedIcon"]', { visible: true, timeout: 30000 });
+        await reportPage.waitForSelector('xpath//*[@data-testid="SaveOutlinedIcon"]', { visible: true, timeout: 60000 });
         await new Promise(r => setTimeout(r, 1000));
         await clickByXPath(reportPage, '//*[@data-testid="SaveOutlinedIcon"]', 'Save Icon (Download)');
 
