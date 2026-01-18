@@ -84,11 +84,14 @@ async function sendEmail(subject, message, attachmentPath = null) {
     }
 }
 
-// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath
+// ฟังก์ชันช่วยคลิก Element โดยใช้ XPath (ปรับปรุงใหม่สำหรับ Puppeteer v23+)
 async function clickByXPath(page, xpath, description = 'Element') {
     try {
-        await page.waitForXPath(xpath, { timeout: 10000, visible: true });
-        const elements = await page.$x(xpath);
+        // แปลง XPath ให้เป็น Selector แบบใหม่ (เติม 'xpath/' นำหน้า)
+        const selector = xpath.startsWith('xpath/') ? xpath : `xpath/${xpath}`;
+        
+        await page.waitForSelector(selector, { timeout: 10000, visible: true });
+        const elements = await page.$$(selector);
         if (elements.length > 0) {
             await elements[0].click();
             console.log(`   Clicked: ${description}`);
@@ -109,21 +112,26 @@ async function clickByXPath(page, xpath, description = 'Element') {
             '--no-sandbox', 
             '--disable-setuid-sandbox',
             '--window-size=1920,1080',
-            '--disable-popup-blocking', // ป้องกัน Popup ถูกบล็อก
-            '--allow-running-insecure-content', // อนุญาตเนื้อหา HTTP
-            '--ignore-certificate-errors', // ข้าม Certificate Error
-            '--unsafely-treat-insecure-origin-as-secure=http://cctvwli.com:3001', // ระบุเว็บที่มีปัญหา
-            // --- เพิ่มคำสั่งปิด Safe Browsing เพื่อแก้ปัญหาหน้าแดง ---
+            '--disable-popup-blocking',
+            '--allow-running-insecure-content',
+            '--ignore-certificate-errors',
+            '--unsafely-treat-insecure-origin-as-secure=http://cctvwli.com:3001',
             '--disable-web-security', 
             '--disable-features=IsolateOrigins,site-per-process',
             '--disable-site-isolation-trials',
             '--disable-client-side-phishing-detection',
             '--no-first-run',
-            '--no-default-browser-check'
+            '--no-default-browser-check',
+            '--lang=th-TH' // *** บังคับภาษาไทย ***
         ]
     });
 
     const page = await browser.newPage();
+    
+    // ตั้งค่าภาษาเพิ่มเติม
+    await page.setExtraHTTPHeaders({
+        'Accept-Language': 'th-TH,th;q=0.9,en;q=0.8'
+    });
     
     // ตั้งค่า Download Path
     const client = await page.target().createCDPSession();
@@ -239,7 +247,7 @@ async function clickByXPath(page, xpath, description = 'Element') {
 
             console.log('   Attempting to trigger Report Center...');
             try {
-                // พยายามคลิกปุ่มศูนย์รายงาน (เอา Tab 3 ครั้งออกแล้ว)
+                // พยายามคลิกปุ่มศูนย์รายงาน
                 const jsResult = await page.evaluate(() => {
                     if (typeof showReportCenter === 'function') {
                         showReportCenter();
@@ -273,7 +281,8 @@ async function clickByXPath(page, xpath, description = 'Element') {
         } catch(e) {}
 
         try {
-            await reportPage.waitForXPath('//*[@id="root"]', { timeout: 10000 });
+            // ใช้ waitForSelector แบบ xpath แทน waitForXPath
+            await reportPage.waitForSelector('xpath//*[@id="root"]', { timeout: 10000 });
         } catch (e) {
             console.log('Warning: Root element taking too long, continuing anyway...');
         }
@@ -297,19 +306,21 @@ async function clickByXPath(page, xpath, description = 'Element') {
         
         // Priority 1: Use specific ID and XPath for the SVG Icon's parent button
         const dmsSelectors = [
-            '//*[local-name()="svg" and @data-testid="FaceIcon"]/..', // Parent of FaceIcon SVG (Most robust)
-            '//*[@id="root"]/div/div[2]/div[1]/div/button[2]', // Exact XPath provided
-            '//button[contains(., "รายงาน DMS")]' // Text content
+            '//*[local-name()="svg" and @data-testid="FaceIcon"]/..', 
+            '//*[@id="root"]/div/div[2]/div[1]/div/button[2]', 
+            '//button[contains(., "รายงาน DMS")]'
         ];
 
         for (const selector of dmsSelectors) {
             if (dmsClicked) break;
             try {
                 console.log(`      Trying selector: ${selector}`);
-                await reportPage.waitForXPath(selector, { visible: true, timeout: 5000 });
-                const [btn] = await reportPage.$x(selector);
-                if (btn) {
-                    await btn.click();
+                // แปลงเป็น xpath selector สำหรับ Puppeteer ใหม่
+                const xpSelector = `xpath/${selector}`;
+                await reportPage.waitForSelector(xpSelector, { visible: true, timeout: 5000 });
+                const elements = await reportPage.$$(xpSelector);
+                if (elements.length > 0) {
+                    await elements[0].click();
                     console.log('      Clicked DMS Report button successfully!');
                     dmsClicked = true;
                 }
@@ -319,18 +330,16 @@ async function clickByXPath(page, xpath, description = 'Element') {
         }
 
         if (!dmsClicked) {
-            // Fallback: ถ้าคลิกไม่ติด ลองใช้ JS Click
+            // Fallback: JS Click
              console.warn('   Click selectors failed. Trying JS click...');
              try {
                 const jsClicked = await reportPage.evaluate(() => {
-                    // Try to find by text content
                     const buttons = Array.from(document.querySelectorAll('button'));
                     const dmsBtn = buttons.find(b => b.textContent.includes('รายงาน DMS'));
                     if (dmsBtn) {
                         dmsBtn.click();
                         return true;
                     }
-                    // Try to find by SVG parent
                     const svg = document.querySelector('svg[data-testid="FaceIcon"]');
                     if (svg && svg.parentElement) {
                         svg.parentElement.click();
@@ -353,18 +362,27 @@ async function clickByXPath(page, xpath, description = 'Element') {
 
         // 6.2 เคลียร์รายการและเลือก Dropdown
         console.log('   Selecting Alerts...');
-        await new Promise(r => setTimeout(r, 2000)); // รอ UI เปลี่ยนหลังกดปุ่ม DMS
+        await new Promise(r => setTimeout(r, 2000)); 
         await clickByXPath(reportPage, '//div[contains(@class, "css-xn5mga")]//tr[2]//td[2]//div/div', 'Alert Type Dropdown');
         
         await new Promise(r => setTimeout(r, 1000));
 
         const selectOption = async (optionText) => {
-            const [option] = await reportPage.$x(`//div[contains(text(), '${optionText}')]`);
-            if (option) {
-                await option.click();
+            // ใช้ xpath selector แทน $x
+            const selector = `xpath///div[contains(text(), '${optionText}')]`;
+            const elements = await reportPage.$$(selector);
+            if (elements.length > 0) {
+                await elements[0].click();
                 console.log(`   Selected: ${optionText}`);
             } else {
-                console.warn(`   Option not found: ${optionText}`);
+                console.warn(`   Option not found: ${optionText} (Page might be in English?)`);
+                
+                // Fallback for English text if needed
+                if (optionText === 'แจ้งเตือนการหาวนอน') {
+                     const engSelector = `xpath///div[contains(text(), 'Yawning')]`; // เดาภาษาอังกฤษ
+                     const engElements = await reportPage.$$(engSelector);
+                     if(engElements.length > 0) { await engElements[0].click(); console.log('   Selected (EN): Yawning'); }
+                }
             }
         };
 
@@ -382,14 +400,24 @@ async function clickByXPath(page, xpath, description = 'Element') {
 
         const startInputXPath = '//div[contains(@class, "css-xn5mga")]//tr[3]//td[2]//input';
         await clickByXPath(reportPage, startInputXPath, 'Start Date Input');
-        await reportPage.click('div.css-xn5mga tr:nth-of-type(3) td:nth-of-type(2) input', { clickCount: 3 });
-        await reportPage.type('div.css-xn5mga tr:nth-of-type(3) td:nth-of-type(2) input', startDateTime);
+        
+        // ใช้ CSS Selector สำหรับการพิมพ์ค่า (ง่ายกว่า)
+        // ต้องหา CSS Selector ที่แม่นยำ หรือใช้ clickByXPath เพื่อ focus แล้วพิมพ์
+        await reportPage.keyboard.down('Control');
+        await reportPage.keyboard.press('A');
+        await reportPage.keyboard.up('Control');
+        await reportPage.keyboard.press('Backspace');
+        await reportPage.keyboard.type(startDateTime);
         await reportPage.keyboard.press('Enter');
 
         const endInputXPath = '//div[contains(@class, "css-xn5mga")]//tr[3]//td[4]//input';
         await clickByXPath(reportPage, endInputXPath, 'End Date Input');
-        await reportPage.click('div.css-xn5mga tr:nth-of-type(3) td:nth-of-type(4) input', { clickCount: 3 });
-        await reportPage.type('div.css-xn5mga tr:nth-of-type(3) td:nth-of-type(4) input', endDateTime);
+        
+        await reportPage.keyboard.down('Control');
+        await reportPage.keyboard.press('A');
+        await reportPage.keyboard.up('Control');
+        await reportPage.keyboard.press('Backspace');
+        await reportPage.keyboard.type(endDateTime);
         await reportPage.keyboard.press('Enter');
 
         // 6.4 กดปุ่ม Search
@@ -404,7 +432,8 @@ async function clickByXPath(page, xpath, description = 'Element') {
         
         // 6.6 รอ Popup และกด Save
         console.log('   Waiting for Save/Download Dialog...');
-        await reportPage.waitForXPath('//*[@data-testid="SaveOutlinedIcon"]', { visible: true, timeout: 30000 });
+        // ใช้ waitForSelector xpath
+        await reportPage.waitForSelector('xpath//*[@data-testid="SaveOutlinedIcon"]', { visible: true, timeout: 30000 });
         await new Promise(r => setTimeout(r, 1000));
         await clickByXPath(reportPage, '//*[@data-testid="SaveOutlinedIcon"]', 'Save Icon (Download)');
 
