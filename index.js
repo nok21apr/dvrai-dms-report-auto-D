@@ -114,26 +114,45 @@ function processExcelFile(filePath) {
         }
 
         const headers = data[0];
+        console.log(`   Headers found: ${JSON.stringify(headers)}`);
+
         let licensePlateIndex = -1;
         let reportTypeIndex = -1;
 
+        // 1. พยายามหาจากชื่อ Header
         headers.forEach((header, index) => {
-            if (header && (header.includes('ทะเบียน') || header.includes('License'))) licensePlateIndex = index;
-            if (header && (header.includes('ชนิด') || header.includes('Type') || header.includes('Alarm'))) reportTypeIndex = index;
+            if (header) {
+                const h = String(header).trim();
+                // หาคำว่า: ทะเบียน, License, หรือ ชื่อรถ
+                if (h.includes('ทะเบียน') || h.includes('License') || h.includes('ชื่อรถ')) licensePlateIndex = index;
+                // หาคำว่า: ชนิด, Type, Alarm, หรือ Event
+                if (h.includes('ชนิด') || h.includes('Type') || h.includes('Alarm') || h.includes('Event')) reportTypeIndex = index;
+            }
         });
 
-        if (licensePlateIndex === -1 || reportTypeIndex === -1) {
-            console.warn('   Could not find "License Plate" or "Report Type" columns. Skipping pivot.');
-            return filePath;
+        // 2. ถ้าหาไม่เจอ ให้ใช้ค่า Default (Column A=0, B=1) ตามที่คุณระบุ
+        if (licensePlateIndex === -1) {
+            console.log('   Warning: "License/ชื่อรถ" header not found. Defaulting to Column A (Index 0).');
+            licensePlateIndex = 0;
+        }
+        if (reportTypeIndex === -1) {
+            console.log('   Warning: "Type/ชนิดรายงาน" header not found. Defaulting to Column B (Index 1).');
+            reportTypeIndex = 1;
+        }
+
+        // ตรวจสอบว่ามีข้อมูลในคอลัมน์นั้นจริงๆ ไหม
+        if (data[1] && (data[1][licensePlateIndex] === undefined || data[1][reportTypeIndex] === undefined)) {
+             console.warn('   Warning: Selected columns seem empty in the first data row.');
         }
 
         const pivotData = {};
         const allTypes = new Set();
 
+        // เริ่มวนลูปข้อมูล (ข้าม Header แถวแรก)
         for (let i = 1; i < data.length; i++) {
             const row = data[i];
-            const plate = row[licensePlateIndex];
-            const type = row[reportTypeIndex];
+            const plate = row[licensePlateIndex]; // ชื่อรถ
+            const type = row[reportTypeIndex];    // ชนิดรายงาน
 
             if (plate && type) {
                 if (!pivotData[plate]) pivotData[plate] = {};
@@ -144,6 +163,7 @@ function processExcelFile(filePath) {
             }
         }
 
+        // สร้างตารางสรุป
         const typeArray = Array.from(allTypes).sort();
         const summaryData = [['ทะเบียนรถ', ...typeArray, 'รวมทั้งหมด']];
 
@@ -159,8 +179,17 @@ function processExcelFile(filePath) {
             summaryData.push(row);
         }
 
+        // เพิ่ม Sheet ใหม่
         const newSheet = XLSX.utils.aoa_to_sheet(summaryData);
-        XLSX.utils.book_append_sheet(workbook, newSheet, "Summary_Pivot");
+        // เช็คว่ามี sheet ซ้ำไหม (ถ้ามีให้ลบออกก่อนเพิ่มใหม่ กัน error)
+        const pivotSheetName = "Summary_Pivot";
+        if (workbook.Sheets[pivotSheetName]) {
+            delete workbook.Sheets[pivotSheetName];
+            const idx = workbook.SheetNames.indexOf(pivotSheetName);
+            if (idx > -1) workbook.SheetNames.splice(idx, 1);
+        }
+        
+        XLSX.utils.book_append_sheet(workbook, newSheet, pivotSheetName);
 
         XLSX.writeFile(workbook, filePath);
         console.log('   Excel file processed successfully (Pivot sheet added).');
