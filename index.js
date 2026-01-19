@@ -98,11 +98,38 @@ async function waitForFileToDownload(timeout) {
     });
 }
 
-// ฟังก์ชันประมวลผล Excel (ทำ Pivot Table)
+// ฟังก์ชันปรับความกว้างคอลัมน์อัตโนมัติ
+function autoFitColumns(worksheet) {
+    const range = XLSX.utils.decode_range(worksheet['!ref']);
+    const colWidths = [];
+
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+        let maxWidth = 10; // ความกว้างเริ่มต้น
+        for (let R = range.s.r; R <= range.e.r; ++R) {
+            const cellAddress = { c: C, r: R };
+            const cellRef = XLSX.utils.encode_cell(cellAddress);
+            const cell = worksheet[cellRef];
+            if (cell && cell.v) {
+                const valueLength = (cell.v.toString().length + 2); // เพิ่ม buffer นิดหน่อย
+                if (valueLength > maxWidth) maxWidth = valueLength;
+            }
+        }
+        colWidths[C] = { wch: maxWidth };
+    }
+    worksheet['!cols'] = colWidths;
+}
+
+// ฟังก์ชันประมวลผล Excel (ทำ Pivot Table + จัดรูปแบบ)
 function processExcelFile(filePath) {
     try {
         console.log(`   Processing Excel file: ${filePath}`);
         const workbook = XLSX.readFile(filePath);
+        
+        // 1. จัดความกว้างให้ทุก Sheet เดิมที่มีอยู่
+        workbook.SheetNames.forEach(sheetName => {
+            autoFitColumns(workbook.Sheets[sheetName]);
+        });
+
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
@@ -181,6 +208,10 @@ function processExcelFile(filePath) {
 
         // เพิ่ม Sheet ใหม่
         const newSheet = XLSX.utils.aoa_to_sheet(summaryData);
+        
+        // จัดความกว้างให้ Sheet ใหม่ด้วย
+        autoFitColumns(newSheet);
+
         // เช็คว่ามี sheet ซ้ำไหม (ถ้ามีให้ลบออกก่อนเพิ่มใหม่ กัน error)
         const pivotSheetName = "Summary_Pivot";
         if (workbook.Sheets[pivotSheetName]) {
@@ -192,7 +223,7 @@ function processExcelFile(filePath) {
         XLSX.utils.book_append_sheet(workbook, newSheet, pivotSheetName);
 
         XLSX.writeFile(workbook, filePath);
-        console.log('   Excel file processed successfully (Pivot sheet added).');
+        console.log('   Excel file processed successfully (Pivot sheet added & Formatting applied).');
         
         return filePath;
 
