@@ -9,7 +9,8 @@
   "dependencies": {
     "puppeteer": "^23.0.0",
     "tesseract.js": "^5.0.0",
-    "nodemailer": "^6.9.0"
+    "nodemailer": "^6.9.0",
+    "xlsx": "^0.18.5"
   },
   "engines": {
     "node": ">=18"
