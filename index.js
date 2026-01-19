@@ -3,7 +3,8 @@ const Tesseract = require('tesseract.js');
 const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
-const os = require('os'); // เพิ่ม os module
+const os = require('os');
+const XLSX = require('xlsx');
 
 // --- CONFIGURATION ---
 const config = {
@@ -95,6 +96,81 @@ async function waitForFileToDownload(timeout) {
             }
         }, checkInterval);
     });
+}
+
+// ฟังก์ชันประมวลผล Excel (ทำ Pivot Table)
+function processExcelFile(filePath) {
+    try {
+        console.log(`   Processing Excel file: ${filePath}`);
+        const workbook = XLSX.readFile(filePath);
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        
+        const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        
+        if (data.length < 2) {
+            console.log('   Excel file is empty or has no data rows.');
+            return filePath;
+        }
+
+        const headers = data[0];
+        let licensePlateIndex = -1;
+        let reportTypeIndex = -1;
+
+        headers.forEach((header, index) => {
+            if (header && (header.includes('ทะเบียน') || header.includes('License'))) licensePlateIndex = index;
+            if (header && (header.includes('ชนิด') || header.includes('Type') || header.includes('Alarm'))) reportTypeIndex = index;
+        });
+
+        if (licensePlateIndex === -1 || reportTypeIndex === -1) {
+            console.warn('   Could not find "License Plate" or "Report Type" columns. Skipping pivot.');
+            return filePath;
+        }
+
+        const pivotData = {};
+        const allTypes = new Set();
+
+        for (let i = 1; i < data.length; i++) {
+            const row = data[i];
+            const plate = row[licensePlateIndex];
+            const type = row[reportTypeIndex];
+
+            if (plate && type) {
+                if (!pivotData[plate]) pivotData[plate] = {};
+                if (!pivotData[plate][type]) pivotData[plate][type] = 0;
+                
+                pivotData[plate][type]++;
+                allTypes.add(type);
+            }
+        }
+
+        const typeArray = Array.from(allTypes).sort();
+        const summaryData = [['ทะเบียนรถ', ...typeArray, 'รวมทั้งหมด']];
+
+        for (const plate in pivotData) {
+            const row = [plate];
+            let total = 0;
+            for (const type of typeArray) {
+                const count = pivotData[plate][type] || 0;
+                row.push(count);
+                total += count;
+            }
+            row.push(total);
+            summaryData.push(row);
+        }
+
+        const newSheet = XLSX.utils.aoa_to_sheet(summaryData);
+        XLSX.utils.book_append_sheet(workbook, newSheet, "Summary_Pivot");
+
+        XLSX.writeFile(workbook, filePath);
+        console.log('   Excel file processed successfully (Pivot sheet added).');
+        
+        return filePath;
+
+    } catch (error) {
+        console.error('   Error processing Excel file:', error.message);
+        return filePath;
+    }
 }
 
 // ฟังก์ชันส่งอีเมล
@@ -401,28 +477,22 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await reportPage.keyboard.down('Control'); await reportPage.keyboard.press('A'); await reportPage.keyboard.up('Control');
         await reportPage.keyboard.press('Backspace'); await reportPage.keyboard.type(endDateTime); await reportPage.keyboard.press('Enter');
 
-        // --- เพิ่มการกด Tab และ Enter เพื่อ Search ---
+        // --- Tab + Enter to Search ---
         console.log('   Pressing Tab + Enter to Search...');
         await new Promise(r => setTimeout(r, 500)); 
-        await reportPage.keyboard.press('Tab'); // กด Tab 1 ครั้ง
+        await reportPage.keyboard.press('Tab'); 
         await new Promise(r => setTimeout(r, 300));
-        await reportPage.keyboard.press('Enter'); // กด Enter เพื่อ Search
+        await reportPage.keyboard.press('Enter'); 
         
         console.log('   Waiting 120s for report generation...');
         await new Promise(r => setTimeout(r, 120000));
 
-        // 6.5 กดปุ่ม EXCEL (แก้ไข: ใช้ Tab + Enter ตามคำสั่ง)
+        // 6.5 กดปุ่ม EXCEL (Tab + Enter)
         console.log('   Clicking EXCEL (via Keyboard Tab+Enter)...');
-        
-        // เราเพิ่งกด Search ไป (ซึ่งน่าจะยัง Focus อยู่ที่ปุ่ม Search)
-        // ตามที่คุณบอก: "หลังจาก เลือกSEARCH เสร็จสิ้นแล้ว ให้ กด tab 1 ครั้ง ซึ่งมันจะตรงกับปุ่ม EXCEL ครับและ กด enter ครับ"
-        
         await reportPage.keyboard.press('Tab');
         await new Promise(r => setTimeout(r, 500));
         await reportPage.keyboard.press('Enter');
-        
         console.log('   Pressed Enter on EXCEL button!');
-
         
         // SAVE
         console.log('   Waiting 20s for Save Dialog...');
@@ -433,8 +503,6 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         saveClicked = await reportPage.evaluate(() => {
             const saveBtn = document.querySelector("#root > div > div.MuiBox-root.css-jbmhbb > div.ant-card.ant-card-bordered.css-y8x9xp > div.ant-card-body > div > div > div > ul > li > div > div > div > div > button");
             if (saveBtn) { saveBtn.click(); return true; }
-            const saveIcon = document.querySelector('[data-testid="SaveOutlinedIcon"]');
-            if (saveIcon && saveIcon.closest('button')) { saveIcon.closest('button').click(); return true; }
             return false;
         });
 
@@ -463,12 +531,14 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             } catch (e) {}
         }
 
+        // --- NEW STEP: Process Excel & Add Pivot Sheet ---
+        downloadedFile = processExcelFile(downloadedFile);
+
         // --- STEP 8: Email ---
         console.log(`8. Sending Email...`);
         await sendEmail(
-            `THAI TRACKING DMS REPORT: ${today}`,
-            `ถึง ผู้เกี่ยวข้อง`, 
-            `รายงาน THAI TRACKING DMS REPORT รอบ 06:00 ถึง 18:00 น.`, 
+            `THAI TRACKING DMS REPORT: ${today}`, 
+            `ถึง ผู้เกี่ยวข้อง\nรายงาน THAI TRACKING DMS REPORT รอบ 06:00 ถึง 18:00 น.`, 
             downloadedFile
         );
 
@@ -491,4 +561,3 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await browser.close();
     }
 })();
-
