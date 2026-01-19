@@ -466,7 +466,8 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         // --- STEP 8: Email ---
         console.log(`8. Sending Email...`);
         await sendEmail(
-            `THAI TRACKING DMS REPORT: ${today}`, 
+            `THAI TRACKING DMS REPORT: ${today}`,
+            `ถึง ผู้เกี่ยวข้อง`, 
             `รายงาน THAI TRACKING DMS REPORT รอบ 06:00 ถึง 18:00 น.`, 
             downloadedFile
         );
@@ -490,3 +491,4 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await browser.close();
     }
 })();
+
