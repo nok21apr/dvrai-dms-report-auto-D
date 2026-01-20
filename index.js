@@ -4,7 +4,7 @@ const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const ExcelJS = require('exceljs'); // เปลี่ยนมาใช้ exceljs
+const ExcelJS = require('exceljs'); // ใช้ exceljs แทน xlsx
 
 // --- CONFIGURATION ---
 const config = {
@@ -98,9 +98,9 @@ async function waitForFileToDownload(timeout) {
     });
 }
 
-// ฟังก์ชันจัดรูปแบบ Sheet (Border + Auto Width)
+// ฟังก์ชันจัดรูปแบบ Sheet (Border + Auto Width + Header Style)
 function formatSheet(worksheet) {
-    // 1. จัด Auto Width
+    // 1. วนลูปทุกคอลัมน์เพื่อหาความกว้างที่เหมาะสมและตีเส้น
     worksheet.columns.forEach(column => {
         let maxLength = 0;
         if (column && column.eachCell) {
@@ -109,78 +109,86 @@ function formatSheet(worksheet) {
                 if (columnLength > maxLength) {
                     maxLength = columnLength;
                 }
+                
+                // ตีเส้นขอบทุกช่องที่มีการวนลูป
+                cell.border = {
+                    top: { style: 'thin' },
+                    left: { style: 'thin' },
+                    bottom: { style: 'thin' },
+                    right: { style: 'thin' }
+                };
             });
-            column.width = maxLength < 10 ? 10 : maxLength + 2; // เพิ่ม buffer 2 ตัวอักษร
+            // ตั้งค่าความกว้าง (Minimum 10)
+            column.width = maxLength < 10 ? 10 : maxLength + 2;
         }
     });
 
-    // 2. ตีเส้นขอบทุกช่องที่มีข้อมูล
-    worksheet.eachRow((row, rowNumber) => {
-        row.eachCell((cell, colNumber) => {
-            cell.border = {
-                top: { style: 'thin' },
-                left: { style: 'thin' },
-                bottom: { style: 'thin' },
-                right: { style: 'thin' }
-            };
-            // จัดกึ่งกลาง (ถ้าต้องการ)
-            // cell.alignment = { vertical: 'middle', horizontal: 'center' };
-        });
-    });
-
-    // 3. จัด Header (แถวแรก) ให้สวยงาม
+    // 2. จัด Header (แถวแรก) ให้สวยงาม (สีเทา + ตัวหนา + กึ่งกลาง)
     const headerRow = worksheet.getRow(1);
     headerRow.eachCell((cell) => {
         cell.font = { bold: true };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
         cell.fill = {
             type: 'pattern',
             pattern: 'solid',
             fgColor: { argb: 'FFD3D3D3' } // สีเทาอ่อน
         };
-        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        // ย้ำเส้นขอบให้ Header
+        cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+        };
     });
 }
 
-// ฟังก์ชันประมวลผล Excel (ทำ Pivot Table ด้วย exceljs)
+// ฟังก์ชันประมวลผล Excel (ทำ Pivot Table ด้วย exceljs + จัดรูปแบบเต็มสูบ)
 async function processExcelFile(filePath) {
     try {
         console.log(`   Processing Excel file (with exceljs): ${filePath}`);
         
-        // ถ้าไฟล์ต้นฉบับเป็น .xls (Binary) exceljs อ่านไม่ได้ ต้องเช็คก่อน
-        // แต่ปกติ Puppeteer download จากเว็บสมัยใหม่มักจะเป็น .xlsx หรือ .csv
-        // ถ้าเป็น .xls จริงๆ อาจต้องใช้ library อื่นแปลงก่อน หรือหวังว่าเป็น XML format
-        // สมมติว่าเป็น .xlsx หรือ format ที่ exceljs อ่านได้
-        
         const workbook = new ExcelJS.Workbook();
         
-        // ลองอ่านไฟล์ (ถ้าเป็น csv ให้ใช้อีกคำสั่ง)
+        // ตรวจสอบนามสกุลไฟล์เพื่อใช้วิธีอ่านที่ถูกต้อง
+        // (exceljs รองรับ xlsx และ csv เท่านั้น ถ้าเป็น xls เก่าอาจมีปัญหา แต่ลองอ่านเป็น xlsx ดู)
         const ext = path.extname(filePath).toLowerCase();
-        if (ext === '.csv') {
+        
+        try {
+            if (ext === '.csv') {
+                await workbook.csv.readFile(filePath);
+            } else {
+                await workbook.xlsx.readFile(filePath);
+            }
+        } catch (e) {
+            console.error('   Read failed, trying as CSV fallback...');
             await workbook.csv.readFile(filePath);
-        } else {
-            await workbook.xlsx.readFile(filePath);
         }
 
         const worksheet = workbook.worksheets[0]; // เอา Sheet แรก
+        if (!worksheet) {
+            console.warn('   No worksheet found.');
+            return filePath;
+        }
         
         // จัดรูปแบบ Sheet เดิมก่อน
         formatSheet(worksheet);
 
         // --- เตรียมข้อมูลทำ Pivot ---
-        // อ่านข้อมูลทั้งหมดเป็น Array of Objects
-        // หา Header row (แถว 1)
+        // อ่าน Header row (แถว 1)
         const firstRow = worksheet.getRow(1);
         const headers = [];
         firstRow.eachCell((cell, colNumber) => {
             headers[colNumber] = cell.value ? cell.value.toString().trim() : '';
         });
 
-        console.log(`   Headers found: ${JSON.stringify(headers)}`);
+        console.log(`   Headers found: ${JSON.stringify(headers.filter(h => h))}`);
 
         let licensePlateIndex = -1;
         let reportTypeIndex = -1;
 
-        // หา Index
+        // หา Index ของคอลัมน์ (ExcelJS index เริ่มที่ 1 แต่ array headers เราเริ่มที่ 1 ตาม colNumber)
+        // headers array index 1 คือ Column A
         headers.forEach((header, index) => {
             if (header) {
                 if (header.includes('ทะเบียน') || header.includes('License') || header.includes('ชื่อรถ')) licensePlateIndex = index;
@@ -188,8 +196,7 @@ async function processExcelFile(filePath) {
             }
         });
 
-        // Fallback Index (ExcelJS index เริ่มที่ 1, แต่ array เราเริ่ม 0 ก็ต้องระวัง)
-        // headers array index 1 คือ Column A ใน ExcelJS
+        // Fallback Index (ถ้าหาไม่เจอ ใช้คอลัมน์ 1 และ 2)
         if (licensePlateIndex === -1) {
             console.log('   Warning: "License" header not found. Defaulting to Column 1.');
             licensePlateIndex = 1;
@@ -252,11 +259,10 @@ async function processExcelFile(filePath) {
         // จัดรูปแบบ Sheet ใหม่ (เส้นขอบ + Auto Width)
         formatSheet(pivotSheet);
 
-        // บันทึกไฟล์ทับ (ต้องเป็น .xlsx)
-        // ถ้าไฟล์เดิมไม่ใช่ .xlsx ให้เปลี่ยนนามสกุล
+        // บันทึกไฟล์ทับ (บังคับเป็น .xlsx เพื่อรองรับ Formatting)
         let outputFilePath = filePath;
-        if (ext !== '.xlsx') {
-            outputFilePath = filePath.replace(ext, '.xlsx');
+        if (path.extname(filePath) !== '.xlsx') {
+            outputFilePath = filePath.substring(0, filePath.lastIndexOf('.')) + '.xlsx';
         }
         
         await workbook.xlsx.writeFile(outputFilePath);
@@ -324,7 +330,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
 }
 
 (async () => {
-    console.log(`--- Started GPS Report Automation [${new Date().toLocaleString()}] ---`);
+    console.log(`--- Started GPS Report Automation (Day Shift) [${new Date().toLocaleString()}] ---`);
     
     if (!config.gpsUser || !config.gpsPass) {
         console.warn("WARNING: GPS_USER or GPS_PASSWORD is missing.");
@@ -560,16 +566,12 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await selectOption('แจ้งเตือนการหลับตา');
         await reportPage.keyboard.press('Escape');
 
-        // --- Date Inputs (Logic: Yesterday 18:00 - Today 06:00) ---
+        // --- Date Inputs (Logic: 06:00 - 18:00 today) ---
         const todayObj = new Date();
-        const yesterdayObj = new Date(todayObj);
-        yesterdayObj.setDate(yesterdayObj.getDate() - 1);
-
         const todayStr = todayObj.toISOString().slice(0, 10);
-        const yesterdayStr = yesterdayObj.toISOString().slice(0, 10);
 
-        const startDateTime = `${yesterdayStr} 18:00:00`;
-        const endDateTime = `${todayStr} 06:00:00`;
+        const startDateTime = `${todayStr} 06:00:00`;
+        const endDateTime = `${todayStr} 18:00:00`;
         
         console.log(`   Setting Time: ${startDateTime} to ${endDateTime}`);
 
@@ -620,12 +622,12 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         let downloadedFile = await waitForFileToDownload(config.downloadTimeout);
         console.log(`   File downloaded: ${downloadedFile}`);
 
-        // --- FIX: Rename file ---
+        // --- FIX: Rename file to .xlsx if missing extension (for exceljs compatibility) ---
         const ext = path.extname(downloadedFile);
         if (!ext || (ext !== '.xls' && ext !== '.xlsx')) {
-            console.log(`   Renaming file to .xls...`);
+            console.log(`   Renaming file to .xlsx...`);
             const dir = path.dirname(downloadedFile);
-            const newName = `GPS_Report_${todayStr}.xls`;
+            const newName = `GPS_Report_${todayStr}.xlsx`;
             const newFilePath = path.join(dir, newName);
             if (fs.existsSync(newFilePath)) try { fs.unlinkSync(newFilePath); } catch(e) {}
             try {
@@ -642,7 +644,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         console.log(`8. Sending Email...`);
         await sendEmail(
             `THAI TRACKING DMS REPORT: ${todayStr}`, 
-            `ถึง ผู้เกี่ยวข้อง\nรายงาน THAI TRACKING DMS REPORT รอบ 18:00 ถึง 06:00 น.\nด้วยความนับถือ\nBOT REPORT`, 
+            `ถึง ผู้เกี่ยวข้อง\nรายงาน THAI TRACKING DMS REPORT รอบ 06:00 ถึง 18:00 น.\nด้วยความนับถือ\nBOT REPORT`, 
             downloadedFile
         );
 
