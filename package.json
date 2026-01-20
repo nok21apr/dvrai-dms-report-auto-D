@@ -10,7 +10,7 @@
     "puppeteer": "^23.0.0",
     "tesseract.js": "^5.0.0",
     "nodemailer": "^6.9.0",
-    "xlsx": "^0.18.5"
+    "exceljs": "^4.4.0"
   },
   "engines": {
     "node": ">=18"
