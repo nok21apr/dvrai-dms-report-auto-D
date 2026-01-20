@@ -4,7 +4,7 @@ const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs'); // เปลี่ยนมาใช้ exceljs
 
 // --- CONFIGURATION ---
 const config = {
@@ -98,88 +98,119 @@ async function waitForFileToDownload(timeout) {
     });
 }
 
-// ฟังก์ชันปรับความกว้างคอลัมน์อัตโนมัติ
-function autoFitColumns(worksheet) {
-    const range = XLSX.utils.decode_range(worksheet['!ref']);
-    const colWidths = [];
-
-    for (let C = range.s.c; C <= range.e.c; ++C) {
-        let maxWidth = 10; // ความกว้างเริ่มต้น
-        for (let R = range.s.r; R <= range.e.r; ++R) {
-            const cellAddress = { c: C, r: R };
-            const cellRef = XLSX.utils.encode_cell(cellAddress);
-            const cell = worksheet[cellRef];
-            if (cell && cell.v) {
-                const valueLength = (cell.v.toString().length + 2); // เพิ่ม buffer นิดหน่อย
-                if (valueLength > maxWidth) maxWidth = valueLength;
-            }
+// ฟังก์ชันจัดรูปแบบ Sheet (Border + Auto Width)
+function formatSheet(worksheet) {
+    // 1. จัด Auto Width
+    worksheet.columns.forEach(column => {
+        let maxLength = 0;
+        if (column && column.eachCell) {
+            column.eachCell({ includeEmpty: true }, function(cell) {
+                const columnLength = cell.value ? cell.value.toString().length : 10;
+                if (columnLength > maxLength) {
+                    maxLength = columnLength;
+                }
+            });
+            column.width = maxLength < 10 ? 10 : maxLength + 2; // เพิ่ม buffer 2 ตัวอักษร
         }
-        colWidths[C] = { wch: maxWidth };
-    }
-    worksheet['!cols'] = colWidths;
+    });
+
+    // 2. ตีเส้นขอบทุกช่องที่มีข้อมูล
+    worksheet.eachRow((row, rowNumber) => {
+        row.eachCell((cell, colNumber) => {
+            cell.border = {
+                top: { style: 'thin' },
+                left: { style: 'thin' },
+                bottom: { style: 'thin' },
+                right: { style: 'thin' }
+            };
+            // จัดกึ่งกลาง (ถ้าต้องการ)
+            // cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        });
+    });
+
+    // 3. จัด Header (แถวแรก) ให้สวยงาม
+    const headerRow = worksheet.getRow(1);
+    headerRow.eachCell((cell) => {
+        cell.font = { bold: true };
+        cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFD3D3D3' } // สีเทาอ่อน
+        };
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
 }
 
-// ฟังก์ชันประมวลผล Excel (ทำ Pivot Table + จัดรูปแบบ)
-function processExcelFile(filePath) {
+// ฟังก์ชันประมวลผล Excel (ทำ Pivot Table ด้วย exceljs)
+async function processExcelFile(filePath) {
     try {
-        console.log(`   Processing Excel file: ${filePath}`);
-        const workbook = XLSX.readFile(filePath);
+        console.log(`   Processing Excel file (with exceljs): ${filePath}`);
         
-        // 1. จัดความกว้างให้ทุก Sheet เดิมที่มีอยู่
-        workbook.SheetNames.forEach(sheetName => {
-            autoFitColumns(workbook.Sheets[sheetName]);
-        });
-
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
+        // ถ้าไฟล์ต้นฉบับเป็น .xls (Binary) exceljs อ่านไม่ได้ ต้องเช็คก่อน
+        // แต่ปกติ Puppeteer download จากเว็บสมัยใหม่มักจะเป็น .xlsx หรือ .csv
+        // ถ้าเป็น .xls จริงๆ อาจต้องใช้ library อื่นแปลงก่อน หรือหวังว่าเป็น XML format
+        // สมมติว่าเป็น .xlsx หรือ format ที่ exceljs อ่านได้
         
-        const data = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        const workbook = new ExcelJS.Workbook();
         
-        if (data.length < 2) {
-            console.log('   Excel file is empty or has no data rows.');
-            return filePath;
+        // ลองอ่านไฟล์ (ถ้าเป็น csv ให้ใช้อีกคำสั่ง)
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === '.csv') {
+            await workbook.csv.readFile(filePath);
+        } else {
+            await workbook.xlsx.readFile(filePath);
         }
 
-        const headers = data[0];
+        const worksheet = workbook.worksheets[0]; // เอา Sheet แรก
+        
+        // จัดรูปแบบ Sheet เดิมก่อน
+        formatSheet(worksheet);
+
+        // --- เตรียมข้อมูลทำ Pivot ---
+        // อ่านข้อมูลทั้งหมดเป็น Array of Objects
+        // หา Header row (แถว 1)
+        const firstRow = worksheet.getRow(1);
+        const headers = [];
+        firstRow.eachCell((cell, colNumber) => {
+            headers[colNumber] = cell.value ? cell.value.toString().trim() : '';
+        });
+
         console.log(`   Headers found: ${JSON.stringify(headers)}`);
 
         let licensePlateIndex = -1;
         let reportTypeIndex = -1;
 
-        // 1. พยายามหาจากชื่อ Header
+        // หา Index
         headers.forEach((header, index) => {
             if (header) {
-                const h = String(header).trim();
-                // หาคำว่า: ทะเบียน, License, หรือ ชื่อรถ
-                if (h.includes('ทะเบียน') || h.includes('License') || h.includes('ชื่อรถ')) licensePlateIndex = index;
-                // หาคำว่า: ชนิด, Type, Alarm, หรือ Event
-                if (h.includes('ชนิด') || h.includes('Type') || h.includes('Alarm') || h.includes('Event')) reportTypeIndex = index;
+                if (header.includes('ทะเบียน') || header.includes('License') || header.includes('ชื่อรถ')) licensePlateIndex = index;
+                if (header.includes('ชนิด') || header.includes('Type') || header.includes('Alarm') || header.includes('Event')) reportTypeIndex = index;
             }
         });
 
-        // 2. ถ้าหาไม่เจอ ให้ใช้ค่า Default (Column A=0, B=1) ตามที่คุณระบุ
+        // Fallback Index (ExcelJS index เริ่มที่ 1, แต่ array เราเริ่ม 0 ก็ต้องระวัง)
+        // headers array index 1 คือ Column A ใน ExcelJS
         if (licensePlateIndex === -1) {
-            console.log('   Warning: "License/ชื่อรถ" header not found. Defaulting to Column A (Index 0).');
-            licensePlateIndex = 0;
+            console.log('   Warning: "License" header not found. Defaulting to Column 1.');
+            licensePlateIndex = 1;
         }
         if (reportTypeIndex === -1) {
-            console.log('   Warning: "Type/ชนิดรายงาน" header not found. Defaulting to Column B (Index 1).');
-            reportTypeIndex = 1;
-        }
-
-        // ตรวจสอบว่ามีข้อมูลในคอลัมน์นั้นจริงๆ ไหม
-        if (data[1] && (data[1][licensePlateIndex] === undefined || data[1][reportTypeIndex] === undefined)) {
-             console.warn('   Warning: Selected columns seem empty in the first data row.');
+            console.log('   Warning: "Type" header not found. Defaulting to Column 2.');
+            reportTypeIndex = 2;
         }
 
         const pivotData = {};
         const allTypes = new Set();
 
-        // เริ่มวนลูปข้อมูล (ข้าม Header แถวแรก)
-        for (let i = 1; i < data.length; i++) {
-            const row = data[i];
-            const plate = row[licensePlateIndex]; // ชื่อรถ
-            const type = row[reportTypeIndex];    // ชนิดรายงาน
+        // วนลูปข้อมูล (เริ่มแถว 2)
+        worksheet.eachRow((row, rowNumber) => {
+            if (rowNumber === 1) return; // ข้าม Header
+
+            const plateCell = row.getCell(licensePlateIndex);
+            const typeCell = row.getCell(reportTypeIndex);
+            
+            const plate = plateCell.value ? plateCell.value.toString() : null;
+            const type = typeCell.value ? typeCell.value.toString() : null;
 
             if (plate && type) {
                 if (!pivotData[plate]) pivotData[plate] = {};
@@ -188,47 +219,53 @@ function processExcelFile(filePath) {
                 pivotData[plate][type]++;
                 allTypes.add(type);
             }
+        });
+
+        // --- สร้าง Sheet ใหม่ (Summary_Pivot) ---
+        const pivotSheetName = "Summary_Pivot";
+        // ลบ Sheet เก่าถ้ามี (กัน Error)
+        const oldSheet = workbook.getWorksheet(pivotSheetName);
+        if (oldSheet) {
+            workbook.removeWorksheet(oldSheet.id);
         }
 
-        // สร้างตารางสรุป
-        const typeArray = Array.from(allTypes).sort();
-        const summaryData = [['ทะเบียนรถ', ...typeArray, 'รวมทั้งหมด']];
+        const pivotSheet = workbook.addWorksheet(pivotSheetName);
 
+        // สร้าง Header สำหรับ Pivot
+        const typeArray = Array.from(allTypes).sort();
+        const pivotHeaders = ['ทะเบียนรถ', ...typeArray, 'รวมทั้งหมด'];
+        pivotSheet.addRow(pivotHeaders);
+
+        // ใส่ข้อมูล Pivot
         for (const plate in pivotData) {
-            const row = [plate];
+            const rowData = [plate];
             let total = 0;
             for (const type of typeArray) {
                 const count = pivotData[plate][type] || 0;
-                row.push(count);
+                rowData.push(count);
                 total += count;
             }
-            row.push(total);
-            summaryData.push(row);
+            rowData.push(total);
+            pivotSheet.addRow(rowData);
         }
 
-        // เพิ่ม Sheet ใหม่
-        const newSheet = XLSX.utils.aoa_to_sheet(summaryData);
-        
-        // จัดความกว้างให้ Sheet ใหม่ด้วย
-        autoFitColumns(newSheet);
+        // จัดรูปแบบ Sheet ใหม่ (เส้นขอบ + Auto Width)
+        formatSheet(pivotSheet);
 
-        // เช็คว่ามี sheet ซ้ำไหม (ถ้ามีให้ลบออกก่อนเพิ่มใหม่ กัน error)
-        const pivotSheetName = "Summary_Pivot";
-        if (workbook.Sheets[pivotSheetName]) {
-            delete workbook.Sheets[pivotSheetName];
-            const idx = workbook.SheetNames.indexOf(pivotSheetName);
-            if (idx > -1) workbook.SheetNames.splice(idx, 1);
+        // บันทึกไฟล์ทับ (ต้องเป็น .xlsx)
+        // ถ้าไฟล์เดิมไม่ใช่ .xlsx ให้เปลี่ยนนามสกุล
+        let outputFilePath = filePath;
+        if (ext !== '.xlsx') {
+            outputFilePath = filePath.replace(ext, '.xlsx');
         }
         
-        XLSX.utils.book_append_sheet(workbook, newSheet, pivotSheetName);
-
-        XLSX.writeFile(workbook, filePath);
-        console.log('   Excel file processed successfully (Pivot sheet added & Formatting applied).');
+        await workbook.xlsx.writeFile(outputFilePath);
+        console.log(`   Excel file processed and saved to: ${outputFilePath}`);
         
-        return filePath;
+        return outputFilePath;
 
     } catch (error) {
-        console.error('   Error processing Excel file:', error.message);
+        console.error('   Error processing Excel file with exceljs:', error.message);
         return filePath;
     }
 }
@@ -523,11 +560,18 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await selectOption('แจ้งเตือนการหลับตา');
         await reportPage.keyboard.press('Escape');
 
-        // Date Inputs
-        const today = new Date().toISOString().slice(0, 10);
-        const startDateTime = `${today} 06:00:00`;
-        const endDateTime = `${today} 18:00:00`;
-        console.log(`   Time: ${startDateTime} to ${endDateTime}`);
+        // --- Date Inputs (Logic: Yesterday 18:00 - Today 06:00) ---
+        const todayObj = new Date();
+        const yesterdayObj = new Date(todayObj);
+        yesterdayObj.setDate(yesterdayObj.getDate() - 1);
+
+        const todayStr = todayObj.toISOString().slice(0, 10);
+        const yesterdayStr = yesterdayObj.toISOString().slice(0, 10);
+
+        const startDateTime = `${yesterdayStr} 18:00:00`;
+        const endDateTime = `${todayStr} 06:00:00`;
+        
+        console.log(`   Setting Time: ${startDateTime} to ${endDateTime}`);
 
         await clickByXPath(reportPage, '//div[contains(@class, "css-xn5mga")]//tr[3]//td[2]//input', 'Start Date');
         await reportPage.keyboard.down('Control'); await reportPage.keyboard.press('A'); await reportPage.keyboard.up('Control');
@@ -581,7 +625,7 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         if (!ext || (ext !== '.xls' && ext !== '.xlsx')) {
             console.log(`   Renaming file to .xls...`);
             const dir = path.dirname(downloadedFile);
-            const newName = `GPS_Report_${today}.xls`;
+            const newName = `GPS_Report_${todayStr}.xls`;
             const newFilePath = path.join(dir, newName);
             if (fs.existsSync(newFilePath)) try { fs.unlinkSync(newFilePath); } catch(e) {}
             try {
@@ -591,14 +635,14 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
             } catch (e) {}
         }
 
-        // --- NEW STEP: Process Excel & Add Pivot Sheet ---
-        downloadedFile = processExcelFile(downloadedFile);
+        // --- NEW STEP: Process Excel & Add Pivot Sheet (with ExcelJS) ---
+        downloadedFile = await processExcelFile(downloadedFile);
 
         // --- STEP 8: Email ---
         console.log(`8. Sending Email...`);
         await sendEmail(
-            `THAI TRACKING DMS REPORT: ${today}`, 
-            `ถึง ผู้เกี่ยวข้อง\nรายงาน THAI TRACKING DMS REPORT รอบ 06:00 ถึง 18:00 น.\nด้วยความนับถือ\nBOT REPORT`, 
+            `THAI TRACKING DMS REPORT: ${todayStr}`, 
+            `ถึง ผู้เกี่ยวข้อง\nรายงาน THAI TRACKING DMS REPORT รอบ 18:00 ถึง 06:00 น.\nด้วยความนับถือ\nBOT REPORT`, 
             downloadedFile
         );
 
@@ -621,4 +665,3 @@ async function clickByXPath(page, xpath, description = 'Element', timeout = 1000
         await browser.close();
     }
 })();
-
